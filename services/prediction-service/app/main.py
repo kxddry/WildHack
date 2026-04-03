@@ -24,7 +24,10 @@ async def lifespan(app: FastAPI):
     """Startup: load model and create DB pool. Shutdown: close DB pool."""
     # Startup
     logger.info("Starting prediction service...")
-    model_manager.load(settings.model_path)
+    try:
+        model_manager.load(settings.model_path)
+    except FileNotFoundError:
+        logger.warning("Model not found at %s — starting in degraded mode", settings.model_path)
     await create_engine_pool(settings.database_url)
 
     app.state.model_manager = model_manager
