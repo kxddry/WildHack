@@ -1,0 +1,28 @@
+__pycache__/
+*.pyc
+.env
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.coverage
+htmlcov/
+*.log
+postgres_data/
+.omc/
+.claude/
+catboost_info/
+
+# Large data files — not for git
+Data/
+Notebooks/
+Submissions/
+CLAUDE.md.pdf
+
+# Model artifacts (add model.pkl explicitly if small enough)
+models/*.pkl
+models/*.joblib
+
+# Competition planning
+PLAN.md
+info.md

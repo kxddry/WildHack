@@ -1,0 +1,87 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: wildhack
+      POSTGRES_USER: wildhack
+      POSTGRES_PASSWORD: wildhack_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wildhack"]
+      interval: 5s
+      retries: 5
+
+  prediction-service:
+    build:
+      context: ../services/prediction-service
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://wildhack:wildhack_dev@postgres:5432/wildhack
+      MODEL_PATH: /app/models/model.pkl
+    volumes:
+      - ../models:/app/models:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  dispatcher-service:
+    build:
+      context: ../services/dispatcher-service
+    ports:
+      - "8001:8001"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://wildhack:wildhack_dev@postgres:5432/wildhack
+      PREDICTION_SERVICE_URL: http://prediction-service:8000
+      TRUCK_CAPACITY: "33"
+      BUFFER_PCT: "0.10"
+      MIN_TRUCKS: "1"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      prediction-service:
+        condition: service_started
+
+  dashboard:
+    build:
+      context: ../services/dashboard
+    ports:
+      - "8501:8501"
+    environment:
+      PREDICTION_SERVICE_URL: http://prediction-service:8000
+      DISPATCHER_SERVICE_URL: http://dispatcher-service:8001
+      DATABASE_URL: postgresql://wildhack:wildhack_dev@postgres:5432/wildhack
+    depends_on:
+      - prediction-service
+      - dispatcher-service
+
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    depends_on:
+      - prediction-service
+      - dispatcher-service
+
+  grafana:
+    image: grafana/grafana:10.4.0
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+    depends_on:
+      - prometheus
+
+volumes:
+  postgres_data:
