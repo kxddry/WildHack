@@ -36,12 +36,7 @@ def main():
     history_df = df_recent[status_cols].copy()
     history_df = history_df.rename(columns={'office_from_id': 'warehouse_id'})
 
-    print(f"Inserting {len(history_df)} rows into route_status_history...")
-    # Use pandas to_sql with chunked inserts for speed
-    history_df.to_sql('route_status_history', engine, if_exists='append', index=False,
-                      method='multi', chunksize=5000)
-
-    # Seed warehouses table
+    # Seed warehouses first (routes FK depends on it)
     warehouse_stats = df.groupby('office_from_id').agg(
         route_count=('route_id', 'nunique'),
         first_seen=('timestamp', 'min'),
@@ -49,16 +44,48 @@ def main():
     ).reset_index()
     warehouse_stats = warehouse_stats.rename(columns={'office_from_id': 'warehouse_id'})
 
-    print(f"Inserting {len(warehouse_stats)} warehouses...")
-    warehouse_stats.to_sql('warehouses', engine, if_exists='append', index=False,
-                           method='multi')
+    routes_df = df[['route_id', 'office_from_id']].drop_duplicates('route_id')
+    routes_df = routes_df.rename(columns={'office_from_id': 'warehouse_id'})
 
-    # Verify
+    with engine.begin() as conn:
+        print(f"Inserting {len(warehouse_stats)} warehouses...")
+        for _, row in warehouse_stats.iterrows():
+            conn.execute(text(
+                "INSERT INTO warehouses (warehouse_id, route_count, first_seen, last_seen) "
+                "VALUES (:wid, :rc, :fs, :ls) ON CONFLICT DO NOTHING"
+            ), {"wid": int(row.warehouse_id), "rc": int(row.route_count),
+                "fs": row.first_seen, "ls": row.last_seen})
+
+        print(f"Inserting {len(routes_df)} routes...")
+        for _, row in routes_df.iterrows():
+            conn.execute(text(
+                "INSERT INTO routes (route_id, warehouse_id) "
+                "VALUES (:rid, :wid) ON CONFLICT DO NOTHING"
+            ), {"rid": int(row.route_id), "wid": int(row.warehouse_id)})
+
+        insert_sql = text(
+            "INSERT INTO route_status_history "
+            "(route_id, warehouse_id, timestamp, "
+            "status_1, status_2, status_3, status_4, "
+            "status_5, status_6, status_7, status_8, target_2h) "
+            "VALUES (:route_id, :warehouse_id, :timestamp, "
+            ":status_1, :status_2, :status_3, :status_4, "
+            ":status_5, :status_6, :status_7, :status_8, :target_2h) "
+            "ON CONFLICT (route_id, timestamp) DO NOTHING"
+        )
+        print(f"Inserting {len(history_df)} rows into route_status_history...")
+        for start in range(0, len(history_df), 5000):
+            chunk = history_df.iloc[start:start + 5000]
+            conn.execute(insert_sql, chunk.to_dict('records'))
+            print(f"  ... {min(start + 5000, len(history_df))}/{len(history_df)}")
+
     with engine.connect() as conn:
         count = conn.execute(text("SELECT COUNT(*) FROM route_status_history")).scalar()
         wh_count = conn.execute(text("SELECT COUNT(*) FROM warehouses")).scalar()
+        rt_count = conn.execute(text("SELECT COUNT(*) FROM routes")).scalar()
         print(f"route_status_history: {count} rows")
         print(f"warehouses: {wh_count} warehouses")
+        print(f"routes: {rt_count} routes")
 
     print("Done!")
 

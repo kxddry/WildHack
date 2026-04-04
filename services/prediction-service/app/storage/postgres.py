@@ -2,6 +2,7 @@
 
 import json
 import logging
+from datetime import datetime
 from typing import Any
 
 import pandas as pd
@@ -13,7 +14,7 @@ logger = logging.getLogger(__name__)
 _engine: AsyncEngine | None = None
 
 
-async def create_engine_pool(database_url: str) -> None:
+async def create_engine_pool(database_url: str) -> AsyncEngine:
     """Create the async engine with connection pooling."""
     global _engine
     _engine = create_async_engine(
@@ -24,6 +25,7 @@ async def create_engine_pool(database_url: str) -> None:
         echo=False,
     )
     logger.info("Database engine created for %s", database_url.split("@")[-1])
+    return _engine
 
 
 async def close_engine() -> None:
@@ -44,7 +46,7 @@ def _get_engine() -> AsyncEngine:
 async def save_forecasts(
     route_id: int,
     warehouse_id: int,
-    anchor_ts: str,
+    anchor_ts: datetime,
     forecasts_json: list[dict[str, Any]],
     model_version: str,
 ) -> None:
@@ -61,31 +63,11 @@ async def save_forecasts(
             {
                 "route_id": route_id,
                 "warehouse_id": warehouse_id,
-                "anchor_ts": anchor_ts,
+                "anchor_ts": anchor_ts.replace(tzinfo=None) if anchor_ts.tzinfo else anchor_ts,
                 "forecasts": json.dumps(forecasts_json),
                 "model_version": model_version,
             },
         )
-
-
-async def get_forecast_history(route_id: int, limit: int = 100) -> list[dict[str, Any]]:
-    """Return recent forecasts for a route."""
-    engine = _get_engine()
-    async with engine.connect() as conn:
-        result = await conn.execute(
-            text(
-                """
-                SELECT route_id, warehouse_id, anchor_ts, forecasts, model_version, created_at
-                FROM forecasts
-                WHERE route_id = :route_id
-                ORDER BY created_at DESC
-                LIMIT :limit
-                """
-            ),
-            {"route_id": route_id, "limit": limit},
-        )
-        rows = result.mappings().all()
-        return [dict(row) for row in rows]
 
 
 async def get_route_status_history(route_id: int, limit: int = 288) -> pd.DataFrame:
@@ -99,7 +81,7 @@ async def get_route_status_history(route_id: int, limit: int = 288) -> pd.DataFr
         result = await conn.execute(
             text(
                 """
-                SELECT timestamp, route_id, office_from_id,
+                SELECT timestamp, route_id, warehouse_id AS office_from_id,
                        status_1, status_2, status_3, status_4,
                        status_5, status_6, status_7, status_8,
                        target_2h
@@ -132,7 +114,7 @@ async def get_route_status_history(route_id: int, limit: int = 288) -> pd.DataFr
 async def append_status_observation(
     route_id: int,
     warehouse_id: int,
-    timestamp: str,
+    timestamp: datetime,
     statuses: dict[str, float],
 ) -> None:
     """Insert a new row into route_status_history."""
@@ -142,19 +124,29 @@ async def append_status_observation(
             text(
                 """
                 INSERT INTO route_status_history
-                    (route_id, office_from_id, timestamp,
+                    (route_id, warehouse_id, timestamp,
                      status_1, status_2, status_3, status_4,
                      status_5, status_6, status_7, status_8)
                 VALUES
-                    (:route_id, :office_from_id, :timestamp,
+                    (:route_id, :warehouse_id, :timestamp,
                      :status_1, :status_2, :status_3, :status_4,
                      :status_5, :status_6, :status_7, :status_8)
+                ON CONFLICT (route_id, timestamp) DO UPDATE SET
+                     warehouse_id = EXCLUDED.warehouse_id,
+                     status_1 = EXCLUDED.status_1,
+                     status_2 = EXCLUDED.status_2,
+                     status_3 = EXCLUDED.status_3,
+                     status_4 = EXCLUDED.status_4,
+                     status_5 = EXCLUDED.status_5,
+                     status_6 = EXCLUDED.status_6,
+                     status_7 = EXCLUDED.status_7,
+                     status_8 = EXCLUDED.status_8
                 """
             ),
             {
                 "route_id": route_id,
-                "office_from_id": warehouse_id,
-                "timestamp": timestamp,
+                "warehouse_id": warehouse_id,
+                "timestamp": timestamp.replace(tzinfo=None) if timestamp.tzinfo else timestamp,
                 "status_1": statuses.get("status_1", 0.0),
                 "status_2": statuses.get("status_2", 0.0),
                 "status_3": statuses.get("status_3", 0.0),
@@ -165,6 +157,20 @@ async def append_status_observation(
                 "status_8": statuses.get("status_8", 0.0),
             },
         )
+
+
+async def get_warehouse_for_route(route_id: int) -> int:
+    """Look up the warehouse_id for a route from the routes table."""
+    engine = _get_engine()
+    async with engine.connect() as conn:
+        result = await conn.execute(
+            text("SELECT warehouse_id FROM routes WHERE route_id = :route_id"),
+            {"route_id": route_id},
+        )
+        row = result.first()
+    if row is None:
+        raise ValueError(f"No route found for route_id={route_id}")
+    return int(row[0])
 
 
 async def check_connection() -> bool:

@@ -106,7 +106,7 @@ class TestAggregateForecasts:
             {"time_slot_start": base_dt, "time_slot_end": end_dt, "total_containers": 50.0},
             {"time_slot_start": base_dt, "time_slot_end": end_dt, "total_containers": 30.0},
         ]
-        result = DispatchCalculator.aggregate_forecasts_by_warehouse(forecasts, warehouse_id=1)
+        result = DispatchCalculator.aggregate_forecasts_by_warehouse(forecasts)
         assert len(result) == 1
         assert result[0]["total_containers"] == 80.0
         assert result[0]["time_slot_start"] == base_dt
@@ -121,7 +121,7 @@ class TestAggregateForecasts:
             {"time_slot_start": slot2_start, "time_slot_end": slot2_end, "total_containers": 60.0},
             {"time_slot_start": base_dt, "time_slot_end": slot1_end, "total_containers": 10.0},
         ]
-        result = DispatchCalculator.aggregate_forecasts_by_warehouse(forecasts, warehouse_id=1)
+        result = DispatchCalculator.aggregate_forecasts_by_warehouse(forecasts)
         assert len(result) == 2
         # Sorted by start time
         assert result[0]["time_slot_start"] == base_dt
@@ -134,11 +134,11 @@ class TestAggregateForecasts:
         forecasts = [
             {"time_slot_start": base_dt, "time_slot_end": end_dt},  # no total_containers
         ]
-        result = DispatchCalculator.aggregate_forecasts_by_warehouse(forecasts, warehouse_id=1)
+        result = DispatchCalculator.aggregate_forecasts_by_warehouse(forecasts)
         assert result[0]["total_containers"] == 0.0
 
     def test_aggregate_forecasts_empty(self):
-        result = DispatchCalculator.aggregate_forecasts_by_warehouse([], warehouse_id=1)
+        result = DispatchCalculator.aggregate_forecasts_by_warehouse([])
         assert result == []
 
     def test_aggregate_forecasts_sorted_by_start(self, base_dt):
@@ -148,7 +148,7 @@ class TestAggregateForecasts:
             {"time_slot_start": slot_a, "time_slot_end": slot_a + timedelta(hours=2), "total_containers": 10.0},
             {"time_slot_start": slot_b, "time_slot_end": slot_b + timedelta(hours=2), "total_containers": 20.0},
         ]
-        result = DispatchCalculator.aggregate_forecasts_by_warehouse(forecasts, warehouse_id=1)
+        result = DispatchCalculator.aggregate_forecasts_by_warehouse(forecasts)
         assert result[0]["time_slot_start"] == slot_b
         assert result[1]["time_slot_start"] == slot_a
 

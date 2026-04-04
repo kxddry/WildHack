@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime
 
@@ -55,8 +56,8 @@ async def save_transport_requests(requests: list[dict]) -> None:
             [
                 {
                     "warehouse_id": r["warehouse_id"],
-                    "time_slot_start": r["time_slot_start"],
-                    "time_slot_end": r["time_slot_end"],
+                    "time_slot_start": r["time_slot_start"].replace(tzinfo=None) if hasattr(r["time_slot_start"], 'tzinfo') and r["time_slot_start"].tzinfo else r["time_slot_start"],
+                    "time_slot_end": r["time_slot_end"].replace(tzinfo=None) if hasattr(r["time_slot_end"], 'tzinfo') and r["time_slot_end"].tzinfo else r["time_slot_end"],
                     "total_containers": r["total_containers"],
                     "truck_capacity": r["truck_capacity"],
                     "buffer_pct": r["buffer_pct"],
@@ -92,25 +93,56 @@ async def get_recent_forecasts(
     time_start: datetime,
     time_end: datetime,
 ) -> list[dict]:
+    """Fetch forecasts for a warehouse within a time range.
+
+    The forecasts table stores prediction steps as JSONB in the ``forecasts``
+    column.  Each step contains a timestamp and predicted value.  This function
+    extracts those steps and returns them in the ``{time_slot_start,
+    time_slot_end, total_containers}`` format expected by
+    :class:`DispatchCalculator`.
+    """
     engine = get_engine()
     async with engine.connect() as conn:
         result = await conn.execute(
             text(
-                "SELECT warehouse_id, time_slot_start, time_slot_end, "
-                "total_containers "
+                "SELECT route_id, anchor_ts, forecasts "
                 "FROM forecasts "
                 "WHERE warehouse_id = :warehouse_id "
-                "AND time_slot_start >= :time_start "
-                "AND time_slot_end <= :time_end "
-                "ORDER BY time_slot_start"
+                "AND anchor_ts >= :time_start "
+                "AND anchor_ts <= :time_end "
+                "ORDER BY anchor_ts"
             ),
             {
                 "warehouse_id": warehouse_id,
-                "time_start": time_start,
-                "time_end": time_end,
+                "time_start": time_start.replace(tzinfo=None) if time_start.tzinfo else time_start,
+                "time_end": time_end.replace(tzinfo=None) if time_end.tzinfo else time_end,
             },
         )
-        return [dict(row._mapping) for row in result.fetchall()]
+        rows = [dict(row._mapping) for row in result.fetchall()]
+
+    items: list[dict] = []
+    for row in rows:
+        forecasts_data = row["forecasts"]
+        if isinstance(forecasts_data, str):
+            forecasts_data = json.loads(forecasts_data)
+        for step in forecasts_data:
+            ts_raw = step.get("timestamp") or step.get("ts")
+            pv = step.get("predicted_value")
+            value = pv if pv is not None else step.get("value", 0.0)
+            if ts_raw is None:
+                continue
+            if isinstance(ts_raw, str):
+                ts_parsed = datetime.fromisoformat(ts_raw)
+            else:
+                ts_parsed = ts_raw
+            if hasattr(ts_parsed, 'tzinfo') and ts_parsed.tzinfo:
+                ts_parsed = ts_parsed.replace(tzinfo=None)
+            items.append({
+                "time_slot_start": ts_parsed,
+                "time_slot_end": ts_parsed,
+                "total_containers": float(value),
+            })
+    return items
 
 
 async def get_all_warehouses() -> list[dict]:

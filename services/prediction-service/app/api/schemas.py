@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class PredictRequest(BaseModel):
@@ -23,6 +23,8 @@ class ForecastStep(BaseModel):
 
 
 class PredictResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
     route_id: int
     warehouse_id: int
     anchor_timestamp: datetime
@@ -41,6 +43,8 @@ class BatchPredictResponse(BaseModel):
 
 
 class HealthResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
     status: str
     model_loaded: bool
     database_connected: bool
@@ -48,6 +52,8 @@ class HealthResponse(BaseModel):
 
 
 class ModelInfoResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
     model_version: str
     model_type: str
     objective: str

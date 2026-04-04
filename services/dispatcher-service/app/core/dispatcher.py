@@ -1,6 +1,6 @@
 import math
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime
 
 
 class DispatchCalculator:
@@ -22,7 +22,6 @@ class DispatchCalculator:
     @staticmethod
     def aggregate_forecasts_by_warehouse(
         forecasts: list[dict],
-        warehouse_id: int,
     ) -> list[dict]:
         slots: dict[tuple[datetime, datetime], float] = defaultdict(float)
 
@@ -85,7 +84,6 @@ class DispatchCalculator:
     ) -> dict:
         aggregated = DispatchCalculator.aggregate_forecasts_by_warehouse(
             forecasts=forecasts,
-            warehouse_id=warehouse_id,
         )
         dispatch_requests = DispatchCalculator.generate_dispatch_requests(
             warehouse_id=warehouse_id,

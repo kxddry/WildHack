@@ -16,7 +16,8 @@ def main():
 
     # Get warehouses
     with engine.connect() as conn:
-        warehouses = pd.read_sql("SELECT warehouse_id, route_count FROM warehouses", conn)
+        result = conn.execute(text("SELECT warehouse_id, route_count FROM warehouses"))
+        warehouses = pd.DataFrame(result.fetchall(), columns=["warehouse_id", "route_count"])
 
     if warehouses.empty:
         print("No warehouses found. Run seed_status_history.py first!")
@@ -39,9 +40,9 @@ def main():
                 ts = anchor + timedelta(minutes=30 * step)
                 value = max(0, np.random.normal(15, 5))
                 forecasts_json.append({
-                    "step": step,
-                    "ts": ts.isoformat(),
-                    "value": round(value, 2)
+                    "horizon_step": step,
+                    "timestamp": ts.isoformat(),
+                    "predicted_value": round(value, 2)
                 })
 
             forecast_rows.append({
@@ -54,7 +55,12 @@ def main():
 
     # Insert forecasts
     df_forecasts = pd.DataFrame(forecast_rows)
-    df_forecasts.to_sql('forecasts', engine, if_exists='append', index=False, method='multi')
+    with engine.begin() as conn:
+        for _, row in df_forecasts.iterrows():
+            conn.execute(text(
+                "INSERT INTO forecasts (route_id, warehouse_id, anchor_ts, forecasts, model_version) "
+                "VALUES (:route_id, :warehouse_id, :anchor_ts, :forecasts, :model_version)"
+            ), dict(row))
     print(f"Inserted {len(df_forecasts)} demo forecasts")
 
     # Generate demo transport requests
@@ -67,6 +73,12 @@ def main():
             total = max(0, np.random.normal(100, 30))
             trucks = max(1, int(np.ceil(total * 1.1 / 33)))
 
+            buffered = total * 1.1
+            calculation = (
+                f"ceil({total:.1f} * (1 + 0.1) / 33)"
+                f" = ceil({buffered:.4f} / 33)"
+                f" = {trucks}"
+            )
             request_rows.append({
                 'warehouse_id': wh_id,
                 'time_slot_start': slot_start,
@@ -75,11 +87,20 @@ def main():
                 'truck_capacity': 33,
                 'buffer_pct': 0.10,
                 'trucks_needed': trucks,
+                'calculation': calculation,
                 'status': 'planned'
             })
 
     df_requests = pd.DataFrame(request_rows)
-    df_requests.to_sql('transport_requests', engine, if_exists='append', index=False, method='multi')
+    with engine.begin() as conn:
+        for _, row in df_requests.iterrows():
+            conn.execute(text(
+                "INSERT INTO transport_requests "
+                "(warehouse_id, time_slot_start, time_slot_end, total_containers, "
+                "truck_capacity, buffer_pct, trucks_needed, calculation, status) "
+                "VALUES (:warehouse_id, :time_slot_start, :time_slot_end, :total_containers, "
+                ":truck_capacity, :buffer_pct, :trucks_needed, :calculation, :status)"
+            ), dict(row))
     print(f"Inserted {len(df_requests)} demo transport requests")
 
     print("Done! Dashboard should now show data.")

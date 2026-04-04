@@ -8,16 +8,16 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api.routes import router
-from app.api.schemas import HealthResponse
 
 
-def _make_app(model_loaded: bool = False) -> FastAPI:
+def _make_app(model_loaded: bool = False, is_mock: bool = False) -> FastAPI:
     """Build a minimal FastAPI app with the prediction router and mocked state."""
     app = FastAPI()
     app.include_router(router)
 
     mock_model = MagicMock()
     mock_model.is_loaded = model_loaded
+    mock_model.is_mock = is_mock
 
     app.state.model_manager = mock_model
     app.state.startup_time = time.time()

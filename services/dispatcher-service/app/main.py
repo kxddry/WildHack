@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -6,22 +7,21 @@ from prometheus_fastapi_instrumentator import Instrumentator
 
 from app.api.routes import router
 from app.config import settings
-from app.core.warehouse import WarehouseRegistry
-from app.storage.postgres import create_engine_pool, close_engine, get_engine
+from app.storage.postgres import create_engine_pool, close_engine
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    engine = await create_engine_pool(settings.database_url)
-
-    registry = WarehouseRegistry()
-    async with engine.connect() as conn:
-        await registry.refresh(conn)
-    app.state.warehouse_registry = registry
-    app.state.settings = settings
+    logger.info("Starting dispatcher service...")
+    await create_engine_pool(settings.database_url)
+    logger.info("Dispatcher service ready")
 
     yield
 
+    logger.info("Shutting down dispatcher service...")
     await close_engine()
 
 
@@ -38,6 +38,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 app.include_router(router)
 

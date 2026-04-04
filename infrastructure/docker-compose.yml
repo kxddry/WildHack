@@ -48,16 +48,20 @@ services:
 
   dashboard:
     build:
-      context: ../services/dashboard
+      context: ../services/dashboard-next
     ports:
-      - "8501:8501"
+      - "8501:3000"
     environment:
       PREDICTION_SERVICE_URL: http://prediction-service:8000
       DISPATCHER_SERVICE_URL: http://dispatcher-service:8001
       DATABASE_URL: postgresql://wildhack:wildhack_dev@postgres:5432/wildhack
     depends_on:
-      - prediction-service
-      - dispatcher-service
+      postgres:
+        condition: service_healthy
+      prediction-service:
+        condition: service_started
+      dispatcher-service:
+        condition: service_started
 
   prometheus:
     image: prom/prometheus:v2.51.0

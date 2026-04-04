@@ -2,7 +2,6 @@
 
 import logging
 import time
-from datetime import datetime
 
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Request
@@ -19,13 +18,11 @@ from app.api.schemas import (
 from app.config import settings
 from app.core.feature_engine import InferenceFeatureEngine
 from app.storage import postgres
-from app.storage.status_history import StatusHistoryManager
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-status_history = StatusHistoryManager()
 feature_engine = InferenceFeatureEngine()
 
 
@@ -42,20 +39,18 @@ async def _run_single_prediction(request: Request, req: PredictRequest) -> Predi
     model_manager = _get_model_manager(request)
 
     # 1. Get route history
-    history_df = await status_history.get_route_history(
+    history_df = await postgres.get_route_status_history(
         req.route_id, limit=settings.history_window,
     )
 
-    # Determine warehouse_id from history or current observation
+    # Determine warehouse_id from routes table or history fallback
     if not history_df.empty:
         warehouse_id = int(history_df["office_from_id"].iloc[-1])
     else:
-        # First observation for this route -- look up warehouse
         try:
-            warehouse_id = await status_history.get_warehouse_for_route(req.route_id)
+            warehouse_id = await postgres.get_warehouse_for_route(req.route_id)
         except ValueError:
-            # No history at all; use route_id as a fallback warehouse_id
-            # (will be corrected once real data flows in)
+            logger.warning("No warehouse mapping for route_id=%d, using route_id as fallback", req.route_id)
             warehouse_id = req.route_id
 
     # 2. Append current observation to history
@@ -69,7 +64,7 @@ async def _run_single_prediction(request: Request, req: PredictRequest) -> Predi
         "status_7": req.status_7,
         "status_8": req.status_8,
     }
-    await status_history.append_observation(
+    await postgres.append_status_observation(
         route_id=req.route_id,
         warehouse_id=warehouse_id,
         timestamp=req.timestamp,
@@ -79,7 +74,7 @@ async def _run_single_prediction(request: Request, req: PredictRequest) -> Predi
     # 3. Build the history DataFrame including the new observation
     #    Append current row to the history for feature computation
     current_row = {
-        "timestamp": pd.Timestamp(req.timestamp),
+        "timestamp": pd.Timestamp(req.timestamp).tz_localize(None),
         "route_id": req.route_id,
         "office_from_id": warehouse_id,
         "target_2h": 0.0,  # Unknown at prediction time
@@ -122,7 +117,7 @@ async def _run_single_prediction(request: Request, req: PredictRequest) -> Predi
         await postgres.save_forecasts(
             route_id=req.route_id,
             warehouse_id=warehouse_id,
-            anchor_ts=anchor_ts.isoformat(),
+            anchor_ts=anchor_ts,
             forecasts_json=forecasts_json,
             model_version=settings.model_version,
         )
@@ -184,7 +179,11 @@ async def health(request: Request) -> HealthResponse:
     startup_time: float = getattr(request.app.state, "startup_time", time.time())
     uptime = time.time() - startup_time
 
-    status = "healthy" if (model_loaded and db_connected) else "degraded"
+    is_mock = model_manager.is_mock
+    if model_loaded and db_connected:
+        status = "mock" if is_mock else "healthy"
+    else:
+        status = "degraded"
 
     return HealthResponse(
         status=status,

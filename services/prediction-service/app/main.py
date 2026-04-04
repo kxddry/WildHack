@@ -27,7 +27,8 @@ async def lifespan(app: FastAPI):
     try:
         model_manager.load(settings.model_path)
     except FileNotFoundError:
-        logger.warning("Model not found at %s — starting in degraded mode", settings.model_path)
+        logger.warning("Model not found at %s — enabling mock prediction mode", settings.model_path)
+        model_manager.enable_mock_mode()
     await create_engine_pool(settings.database_url)
 
     app.state.model_manager = model_manager
@@ -51,7 +52,6 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )

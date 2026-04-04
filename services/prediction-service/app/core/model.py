@@ -9,18 +9,33 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
+_STATUS_COLS = [f"status_{i}" for i in range(1, 9)]
+
 
 class ModelManager:
-    """Loads and serves a LightGBM model with optional metadata."""
+    """Loads and serves a LightGBM model with optional metadata.
+
+    Supports mock mode for local development without a trained model.
+    """
 
     def __init__(self) -> None:
         self._model: Any | None = None
         self._metadata: dict[str, Any] = {}
         self._model_path: str | None = None
+        self._mock_mode: bool = False
 
     @property
     def is_loaded(self) -> bool:
-        return self._model is not None
+        return self._model is not None or self._mock_mode
+
+    @property
+    def is_mock(self) -> bool:
+        return self._mock_mode
+
+    def enable_mock_mode(self) -> None:
+        """Enable mock predictions for local development."""
+        self._mock_mode = True
+        logger.info("Mock prediction mode enabled — returning synthetic forecasts")
 
     def load(self, path: str) -> None:
         """Load a LightGBM model from a joblib pickle file.
@@ -57,15 +72,51 @@ class ModelManager:
         """Run prediction on a feature DataFrame.
 
         Returns clipped (>=0) predictions.
+        In mock mode returns synthetic values derived from input statuses.
         """
+        if self._mock_mode:
+            return self._mock_predict(features)
+
         if self._model is None:
             raise RuntimeError("Model is not loaded. Call load() first.")
 
         raw_preds = self._model.predict(features)
         return np.clip(raw_preds, 0, None)
 
+    def _mock_predict(self, features: pd.DataFrame) -> np.ndarray:
+        """Generate plausible synthetic predictions from input features."""
+        n_rows = len(features)
+        rng = np.random.default_rng(seed=42)
+
+        available = [c for c in _STATUS_COLS if c in features.columns]
+        if available:
+            base = features[available].sum(axis=1).to_numpy(dtype=float)
+        else:
+            base = np.full(n_rows, 15.0)
+
+        if "horizon_step" in features.columns:
+            steps = features["horizon_step"].to_numpy(dtype=float)
+            decay = 1.0 - 0.03 * (steps - 1)
+        else:
+            decay = np.linspace(1.0, 0.7, n_rows)
+
+        preds = base * decay * 0.3 + rng.normal(0, 0.5, n_rows)
+        return np.clip(preds, 0, None)
+
     def info(self) -> dict[str, Any]:
         """Return model metadata and introspected properties."""
+        if self._mock_mode:
+            return {
+                "model_path": None,
+                "model_type": "MockPredictor",
+                "objective": "regression",
+                "cv_score": None,
+                "feature_count": 0,
+                "feature_names": [],
+                "n_estimators_fitted": 0,
+                "training_date": "2025-05-01T00:00:00",
+            }
+
         if self._model is None:
             raise RuntimeError("Model is not loaded. Call load() first.")
 
