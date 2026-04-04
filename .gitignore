@@ -31,6 +31,8 @@ info.md
 
 # Node
 node_modules/
+.next/
+tsconfig.tsbuildinfo
 
 # Playwright MCP artifacts
 .playwright-mcp/
