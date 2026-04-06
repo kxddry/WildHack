@@ -41,6 +41,22 @@ class DispatchCalculator:
         ]
 
     @staticmethod
+    def compute_adaptive_buffer(
+        total_containers: float,
+        min_buffer: float = 0.05,
+        max_buffer: float = 0.25,
+        scale_threshold: float = 50.0,
+    ) -> float:
+        """Adaptive buffer: higher buffer for small forecasts (more uncertain), lower for large.
+
+        Uses a simple inverse scaling: buffer = max_buffer - (max_buffer - min_buffer) * min(total / threshold, 1.0)
+        """
+        if total_containers <= 0:
+            return max_buffer
+        ratio = min(total_containers / scale_threshold, 1.0)
+        return max_buffer - (max_buffer - min_buffer) * ratio
+
+    @staticmethod
     def generate_dispatch_requests(
         warehouse_id: int,
         aggregated: list[dict],
@@ -49,15 +65,26 @@ class DispatchCalculator:
         requests = []
         for slot in aggregated:
             total = slot["total_containers"]
+
+            # Use adaptive buffer if enabled
+            if getattr(config, 'adaptive_buffer', False):
+                buffer = DispatchCalculator.compute_adaptive_buffer(
+                    total,
+                    min_buffer=getattr(config, 'min_buffer_pct', 0.05),
+                    max_buffer=getattr(config, 'max_buffer_pct', 0.25),
+                )
+            else:
+                buffer = config.buffer_pct
+
             trucks_needed = DispatchCalculator.calculate_trucks(
                 total_containers=total,
                 capacity=config.truck_capacity,
-                buffer_pct=config.buffer_pct,
+                buffer_pct=buffer,
                 min_trucks=config.min_trucks,
             )
-            buffered = total * (1 + config.buffer_pct)
+            buffered = total * (1 + buffer)
             calculation = (
-                f"ceil({total} * (1 + {config.buffer_pct}) / {config.truck_capacity})"
+                f"ceil({total} * (1 + {buffer:.2f}) / {config.truck_capacity})"
                 f" = ceil({buffered:.4f} / {config.truck_capacity})"
                 f" = {trucks_needed}"
             )
@@ -68,7 +95,7 @@ class DispatchCalculator:
                     "time_slot_end": slot["time_slot_end"],
                     "total_containers": total,
                     "truck_capacity": config.truck_capacity,
-                    "buffer_pct": config.buffer_pct,
+                    "buffer_pct": buffer,
                     "trucks_needed": trucks_needed,
                     "calculation": calculation,
                     "status": "planned",

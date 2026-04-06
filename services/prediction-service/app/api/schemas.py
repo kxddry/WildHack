@@ -30,6 +30,7 @@ class PredictResponse(BaseModel):
     anchor_timestamp: datetime
     forecasts: list[ForecastStep]
     model_version: str
+    shadow_forecasts: list[ForecastStep] | None = None
 
 
 class BatchPredictRequest(BaseModel):
