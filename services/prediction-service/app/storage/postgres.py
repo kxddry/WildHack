@@ -173,6 +173,36 @@ async def get_warehouse_for_route(route_id: int) -> int:
     return int(row[0])
 
 
+async def get_warehouse_avg_history(warehouse_id: int, limit: int = 288) -> pd.DataFrame:
+    """Get average status history across all routes in a warehouse for cold-start fallback."""
+    engine = _get_engine()
+    async with engine.connect() as conn:
+        result = await conn.execute(
+            text("""
+                SELECT timestamp,
+                       :warehouse_id AS route_id,
+                       warehouse_id AS office_from_id,
+                       AVG(status_1) AS status_1, AVG(status_2) AS status_2,
+                       AVG(status_3) AS status_3, AVG(status_4) AS status_4,
+                       AVG(status_5) AS status_5, AVG(status_6) AS status_6,
+                       AVG(status_7) AS status_7, AVG(status_8) AS status_8,
+                       AVG(target_2h) AS target_2h
+                FROM route_status_history
+                WHERE warehouse_id = :warehouse_id
+                GROUP BY timestamp, warehouse_id
+                ORDER BY timestamp DESC
+                LIMIT :limit
+            """),
+            {"warehouse_id": warehouse_id, "limit": limit},
+        )
+        rows = result.mappings().all()
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame([dict(r) for r in rows])
+    df = df.sort_values("timestamp").reset_index(drop=True)
+    return df
+
+
 async def check_connection() -> bool:
     """Check if the database is reachable."""
     try:

@@ -24,7 +24,7 @@ services:
       DATABASE_URL: postgresql+asyncpg://wildhack:wildhack_dev@postgres:5432/wildhack
       MODEL_PATH: /app/models/model.pkl
     volumes:
-      - ../models:/app/models:ro
+      - ../models:/app/models
     depends_on:
       postgres:
         condition: service_healthy
@@ -40,6 +40,9 @@ services:
       TRUCK_CAPACITY: "33"
       BUFFER_PCT: "0.10"
       MIN_TRUCKS: "1"
+      ADAPTIVE_BUFFER: "false"
+      MIN_BUFFER_PCT: "0.05"
+      MAX_BUFFER_PCT: "0.25"
     depends_on:
       postgres:
         condition: service_healthy
@@ -61,6 +64,45 @@ services:
       prediction-service:
         condition: service_started
       dispatcher-service:
+        condition: service_started
+
+  scheduler-service:
+    build:
+      context: ../services/scheduler-service
+    ports:
+      - "8002:8002"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://wildhack:wildhack_dev@postgres:5432/wildhack
+      PREDICTION_SERVICE_URL: http://prediction-service:8000
+      DISPATCHER_SERVICE_URL: http://dispatcher-service:8001
+      PREDICTION_INTERVAL_MINUTES: "30"
+      QUALITY_CHECK_INTERVAL_MINUTES: "60"
+      RETRAINING_SERVICE_URL: http://retraining-service:8003
+    depends_on:
+      postgres:
+        condition: service_healthy
+      prediction-service:
+        condition: service_started
+      dispatcher-service:
+        condition: service_started
+
+  retraining-service:
+    build:
+      context: ../services/retraining-service
+    ports:
+      - "8003:8003"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://wildhack:wildhack_dev@postgres:5432/wildhack
+      SYNC_DATABASE_URL: postgresql://wildhack:wildhack_dev@postgres:5432/wildhack
+      PREDICTION_SERVICE_URL: http://prediction-service:8000
+      MODEL_OUTPUT_DIR: /app/models
+      TRAINING_WINDOW_DAYS: "7"
+    volumes:
+      - ../models:/app/models
+    depends_on:
+      postgres:
+        condition: service_healthy
+      prediction-service:
         condition: service_started
 
   prometheus:

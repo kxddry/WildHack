@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator
 
-from app.api.routes import router
+from app.api.routes import feature_engine, router
 from app.config import settings
 from app.core.model import ModelManager
 from app.storage.postgres import close_engine, create_engine_pool
@@ -30,6 +30,8 @@ async def lifespan(app: FastAPI):
         logger.warning("Model not found at %s — enabling mock prediction mode", settings.model_path)
         model_manager.enable_mock_mode()
     await create_engine_pool(settings.database_url)
+    feature_engine.load_static_aggregations(settings.static_aggs_path)
+    feature_engine.load_fill_values(settings.fill_values_path)
 
     app.state.model_manager = model_manager
     app.state.startup_time = time.time()
