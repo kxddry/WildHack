@@ -82,6 +82,22 @@ class ModelRegistry:
         except Exception:
             logger.exception("Failed to copy model to canonical path — promotion succeeded in-memory")
 
+        # Reload static aggregations in prediction-service so feature statistics
+        # match the newly promoted model's training distribution.
+        try:
+            reload_resp = await self._client.post(
+                f"{self._prediction_url}/model/reload-features",
+                timeout=30.0,
+            )
+            if reload_resp.status_code == 200:
+                logger.info("Feature aggregations reloaded in prediction-service")
+            else:
+                logger.warning(
+                    "Feature reload returned %d: %s", reload_resp.status_code, reload_resp.text
+                )
+        except Exception:
+            logger.exception("Failed to reload features — predictions will use previous agg stats")
+
         return result
 
     async def trigger_reload(self) -> dict:

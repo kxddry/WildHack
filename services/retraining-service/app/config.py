@@ -11,7 +11,7 @@ class Settings(BaseSettings):
 
     model_output_dir: str = "/app/models"
     canonical_model_filename: str = "model.pkl"
-    training_window_days: int = 7
+    training_window_days: int = 30
     min_training_rows: int = 1000
 
     # LightGBM hyperparameters

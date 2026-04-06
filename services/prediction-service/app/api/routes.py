@@ -277,6 +277,34 @@ async def reload_model(request: Request) -> dict:
         raise HTTPException(status_code=500, detail=f"Model reload failed: {e}")
 
 
+@router.post("/model/reload-features")
+async def reload_features() -> dict:
+    """Reload static aggregations and fill values from disk.
+
+    Called by the retraining service after a new model is promoted to primary,
+    ensuring inference features stay in sync with the latest training statistics.
+    """
+    reloaded: list[str] = []
+    errors: list[str] = []
+
+    try:
+        feature_engine.load_static_aggregations(settings.static_aggs_path)
+        reloaded.append("static_aggs")
+    except Exception as exc:
+        errors.append(f"static_aggs: {exc}")
+
+    try:
+        feature_engine.load_fill_values(settings.fill_values_path)
+        reloaded.append("fill_values")
+    except Exception as exc:
+        errors.append(f"fill_values: {exc}")
+
+    if errors and not reloaded:
+        raise HTTPException(status_code=500, detail=f"Feature reload failed: {errors}")
+
+    return {"status": "reloaded", "reloaded": reloaded, "errors": errors}
+
+
 @router.post("/model/shadow/load")
 async def load_shadow_model(request: Request, path: str = "models/shadow_model.pkl") -> dict:
     """Load a shadow/challenger model for A/B comparison."""
