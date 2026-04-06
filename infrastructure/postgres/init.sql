@@ -50,7 +50,9 @@ CREATE TABLE IF NOT EXISTS transport_requests (
     calculation     TEXT,
     status          VARCHAR(32) NOT NULL DEFAULT 'planned'
                     CHECK (status IN ('planned', 'dispatched', 'completed', 'cancelled')),
-    created_at      TIMESTAMP NOT NULL DEFAULT NOW()
+    created_at      TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMP DEFAULT NOW(),
+    UNIQUE (warehouse_id, time_slot_start, time_slot_end)
 );
 
 CREATE INDEX IF NOT EXISTS idx_requests_warehouse_slot ON transport_requests (warehouse_id, time_slot_start);
@@ -84,3 +86,50 @@ CREATE TABLE IF NOT EXISTS routes (
 );
 
 CREATE INDEX IF NOT EXISTS idx_routes_warehouse ON routes (warehouse_id);
+
+-- Pipeline runs table: scheduler service audit log
+CREATE TABLE IF NOT EXISTS pipeline_runs (
+    id              BIGSERIAL PRIMARY KEY,
+    run_type        VARCHAR(64) NOT NULL DEFAULT 'prediction_cycle',
+    status          VARCHAR(32) NOT NULL DEFAULT 'unknown',
+    started_at      TIMESTAMP NOT NULL,
+    completed_at    TIMESTAMP,
+    details         JSONB,
+    created_at      TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_pipeline_runs_started ON pipeline_runs (started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_pipeline_runs_type ON pipeline_runs (run_type);
+
+-- Prediction quality tracking: stores quality metrics computed by scheduler
+CREATE TABLE IF NOT EXISTS prediction_quality (
+    id              BIGSERIAL PRIMARY KEY,
+    checked_at      TIMESTAMP NOT NULL,
+    wape            DOUBLE PRECISION NOT NULL,
+    rbias           DOUBLE PRECISION NOT NULL,
+    combined_score  DOUBLE PRECISION NOT NULL,
+    n_pairs         INTEGER NOT NULL,
+    alert_triggered BOOLEAN NOT NULL DEFAULT FALSE,
+    details_json    JSONB,
+    created_at      TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_quality_checked ON prediction_quality (checked_at DESC);
+
+-- Retrain history: tracks model retraining runs
+CREATE TABLE IF NOT EXISTS retrain_history (
+    id              BIGSERIAL PRIMARY KEY,
+    started_at      TIMESTAMP NOT NULL,
+    completed_at    TIMESTAMP,
+    status          VARCHAR(32) NOT NULL DEFAULT 'running'
+                    CHECK (status IN ('running', 'success', 'failed', 'skipped')),
+    training_rows   INTEGER,
+    champion_score  DOUBLE PRECISION,
+    challenger_score DOUBLE PRECISION,
+    promoted        BOOLEAN NOT NULL DEFAULT FALSE,
+    new_model_version VARCHAR(64),
+    details_json    JSONB,
+    created_at      TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_retrain_status ON retrain_history (status, started_at DESC);

@@ -16,6 +16,7 @@ class ModelManager:
     """Loads and serves a LightGBM model with optional metadata.
 
     Supports mock mode for local development without a trained model.
+    Supports shadow model for A/B comparison.
     """
 
     def __init__(self) -> None:
@@ -23,6 +24,10 @@ class ModelManager:
         self._metadata: dict[str, Any] = {}
         self._model_path: str | None = None
         self._mock_mode: bool = False
+        self._shadow_model: Any | None = None
+        self._shadow_metadata: dict[str, Any] = {}
+        self._shadow_path: str | None = None
+        self._shadow_version: str | None = None
 
     @property
     def is_loaded(self) -> bool:
@@ -84,24 +89,118 @@ class ModelManager:
         return np.clip(raw_preds, 0, None)
 
     def _mock_predict(self, features: pd.DataFrame) -> np.ndarray:
-        """Generate plausible synthetic predictions from input features."""
-        n_rows = len(features)
-        rng = np.random.default_rng(seed=42)
+        """Generate realistic synthetic predictions for local development.
 
+        Uses route_id + slot as seed for reproducible but varied results.
+        Applies time-of-day pattern: morning peak, night trough.
+        """
+        n_rows = len(features)
+
+        # Seed from route_id + horizon_minutes for variation across routes and calls
+        seed_val = 42
+        if "route_id" in features.columns:
+            rid = features["route_id"]
+            seed_val = int(rid.cat.codes.iloc[0]) if hasattr(rid.dtype, "categories") else int(rid.iloc[0])
+            seed_val = seed_val * 997 + 1
+        if "horizon_minutes" in features.columns:
+            seed_val += int(features["horizon_minutes"].iloc[0])
+        rng = np.random.default_rng(seed=seed_val)
+
+        # Base: sum of statuses (inventory signal)
         available = [c for c in _STATUS_COLS if c in features.columns]
         if available:
             base = features[available].sum(axis=1).to_numpy(dtype=float)
         else:
             base = np.full(n_rows, 15.0)
 
+        # Time-of-day multiplier from horizon_step (simulates daily pattern)
         if "horizon_step" in features.columns:
             steps = features["horizon_step"].to_numpy(dtype=float)
-            decay = 1.0 - 0.03 * (steps - 1)
+            tod_mult = 0.7 + 0.3 * np.sin(np.pi * steps / 10)
         else:
-            decay = np.linspace(1.0, 0.7, n_rows)
+            tod_mult = np.ones(n_rows)
 
-        preds = base * decay * 0.3 + rng.normal(0, 0.5, n_rows)
+        # Horizon decay: further steps = less certain
+        if "horizon_step" in features.columns:
+            steps = features["horizon_step"].to_numpy(dtype=float)
+            decay = 1.0 - 0.025 * (steps - 1)
+        else:
+            decay = np.linspace(1.0, 0.75, n_rows)
+
+        preds = base * tod_mult * decay * 0.4 + rng.normal(0, 0.8, n_rows)
         return np.clip(preds, 0, None)
+
+    def reload(self, path: str | None = None) -> dict[str, Any]:
+        """Hot-reload model from disk without restarting the service."""
+        reload_path = path or self._model_path
+        if reload_path is None:
+            raise RuntimeError("No model path configured")
+
+        old_info = self.info() if self.is_loaded else {}
+        self.load(reload_path)
+        new_info = self.info()
+
+        return {"old": old_info, "new": new_info, "reloaded": True}
+
+    def load_shadow(self, path: str) -> None:
+        """Load a shadow/challenger model for A/B comparison."""
+        shadow_path = Path(path)
+        if not shadow_path.exists():
+            raise FileNotFoundError(f"Shadow model not found at {shadow_path}")
+
+        logger.info("Loading shadow model from %s", shadow_path)
+        self._shadow_model = joblib.load(shadow_path)
+        self._shadow_path = str(shadow_path.resolve())
+        self._shadow_version = shadow_path.stem
+
+        metadata_path = shadow_path.with_name(shadow_path.stem + "_metadata.json")
+        if metadata_path.exists():
+            with open(metadata_path, "r") as f:
+                self._shadow_metadata = json.load(f)
+        else:
+            self._shadow_metadata = {}
+
+        logger.info("Shadow model loaded successfully")
+
+    def predict_shadow(self, features: pd.DataFrame) -> np.ndarray | None:
+        """Run shadow model prediction. Returns None if no shadow model loaded."""
+        if self._shadow_model is None:
+            return None
+        try:
+            raw = self._shadow_model.predict(features)
+            return np.clip(raw, 0, None)
+        except Exception:
+            logger.exception("Shadow model prediction failed")
+            return None
+
+    @property
+    def has_shadow(self) -> bool:
+        return self._shadow_model is not None
+
+    @property
+    def shadow_version(self) -> str | None:
+        return self._shadow_version
+
+    def promote_shadow(self) -> None:
+        """Promote shadow model to primary, discard old primary."""
+        if self._shadow_model is None:
+            raise RuntimeError("No shadow model loaded")
+        self._model = self._shadow_model
+        self._metadata = self._shadow_metadata
+        self._model_path = self._shadow_path
+        self._shadow_model = None
+        self._shadow_metadata = {}
+        self._shadow_path = None
+        self._shadow_version = None
+        logger.info("Shadow model promoted to primary")
+
+    def remove_shadow(self) -> None:
+        """Remove the shadow model."""
+        self._shadow_model = None
+        self._shadow_metadata = {}
+        self._shadow_path = None
+        self._shadow_version = None
+        logger.info("Shadow model removed")
 
     def info(self) -> dict[str, Any]:
         """Return model metadata and introspected properties."""

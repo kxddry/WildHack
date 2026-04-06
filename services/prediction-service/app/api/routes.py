@@ -1,5 +1,6 @@
 """FastAPI router with prediction, health, and model info endpoints."""
 
+import asyncio
 import logging
 import time
 
@@ -24,6 +25,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 feature_engine = InferenceFeatureEngine()
+
+COLD_START_THRESHOLD = 24  # minimum 12 hours of history needed
 
 
 def _get_model_manager(request: Request):
@@ -72,7 +75,6 @@ async def _run_single_prediction(request: Request, req: PredictRequest) -> Predi
     )
 
     # 3. Build the history DataFrame including the new observation
-    #    Append current row to the history for feature computation
     current_row = {
         "timestamp": pd.Timestamp(req.timestamp).tz_localize(None),
         "route_id": req.route_id,
@@ -80,7 +82,27 @@ async def _run_single_prediction(request: Request, req: PredictRequest) -> Predi
         "target_2h": 0.0,  # Unknown at prediction time
         **statuses,
     }
-    if history_df.empty:
+
+    cold_start = len(history_df) < COLD_START_THRESHOLD
+    if cold_start and warehouse_id:
+        logger.warning(
+            "Cold-start for route_id=%d (only %d rows), using warehouse average",
+            req.route_id,
+            len(history_df),
+        )
+        fallback_df = await postgres.get_warehouse_avg_history(warehouse_id, limit=settings.history_window)
+        if not fallback_df.empty:
+            fallback_df = fallback_df.copy()
+            fallback_df["route_id"] = req.route_id
+            fallback_df["office_from_id"] = warehouse_id
+            new_row_df = pd.DataFrame([current_row])
+            full_history = pd.concat([fallback_df, new_row_df], ignore_index=True)
+        elif history_df.empty:
+            full_history = pd.DataFrame([current_row])
+        else:
+            new_row_df = pd.DataFrame([current_row])
+            full_history = pd.concat([history_df, new_row_df], ignore_index=True)
+    elif history_df.empty:
         full_history = pd.DataFrame([current_row])
     else:
         new_row_df = pd.DataFrame([current_row])
@@ -94,8 +116,39 @@ async def _run_single_prediction(request: Request, req: PredictRequest) -> Predi
         forecast_steps=settings.forecast_steps,
     )
 
-    # 5. Run model prediction
+    # 5a. Run primary model prediction
     predictions = model_manager.predict(features_df)
+
+    # 5b. Shadow model prediction (non-blocking, for A/B comparison)
+    shadow_steps = None
+    shadow_preds = model_manager.predict_shadow(features_df)
+    if shadow_preds is not None:
+        shadow_steps = []
+        for i, pred_value in enumerate(shadow_preds):
+            step_num = i + 1
+            step_ts = req.timestamp + pd.Timedelta(minutes=settings.step_interval_minutes * step_num)
+            shadow_steps.append(
+                ForecastStep(
+                    horizon_step=step_num,
+                    timestamp=step_ts,
+                    predicted_value=round(float(pred_value), 4),
+                )
+            )
+
+    # 5c. Save shadow forecasts to DB
+    if shadow_steps is not None:
+        shadow_version = model_manager.shadow_version or "shadow"
+        shadow_json = [fs.model_dump(mode="json") for fs in shadow_steps]
+        try:
+            await postgres.save_forecasts(
+                route_id=req.route_id,
+                warehouse_id=warehouse_id,
+                anchor_ts=req.timestamp,
+                forecasts_json=shadow_json,
+                model_version=shadow_version,
+            )
+        except Exception:
+            logger.warning("Failed to save shadow forecasts for route_id=%d", req.route_id)
 
     # 6. Build forecast steps
     anchor_ts = req.timestamp
@@ -131,6 +184,7 @@ async def _run_single_prediction(request: Request, req: PredictRequest) -> Predi
         anchor_timestamp=anchor_ts,
         forecasts=forecast_steps,
         model_version=settings.model_version,
+        shadow_forecasts=shadow_steps,
     )
 
 
@@ -150,23 +204,24 @@ async def predict(request: Request, req: PredictRequest) -> PredictResponse:
 async def predict_batch(request: Request, req: BatchPredictRequest) -> BatchPredictResponse:
     """Run prediction pipeline for multiple routes."""
     start = time.monotonic()
-    results: list[PredictResponse] = []
+    semaphore = asyncio.Semaphore(10)
 
-    for pred_req in req.predictions:
-        try:
-            result = await _run_single_prediction(request, pred_req)
+    async def _predict_with_limit(pred_req: PredictRequest) -> PredictResponse:
+        async with semaphore:
+            return await _run_single_prediction(request, pred_req)
+
+    tasks = [_predict_with_limit(r) for r in req.predictions]
+    settled = await asyncio.gather(*tasks, return_exceptions=True)
+
+    results = []
+    for i, result in enumerate(settled):
+        if isinstance(result, Exception):
+            logger.exception("Batch prediction failed for route_id=%d", req.predictions[i].route_id)
+        else:
             results.append(result)
-        except Exception:
-            logger.exception("Batch prediction failed for route_id=%d", pred_req.route_id)
-            # Skip failed routes in batch mode, continue with the rest
 
     elapsed_ms = (time.monotonic() - start) * 1000.0
-
-    return BatchPredictResponse(
-        results=results,
-        total=len(results),
-        processing_time_ms=round(elapsed_ms, 2),
-    )
+    return BatchPredictResponse(results=results, total=len(results), processing_time_ms=round(elapsed_ms, 2))
 
 
 @router.get("/health", response_model=HealthResponse)
@@ -209,3 +264,52 @@ async def model_info(request: Request) -> ModelInfoResponse:
         forecast_horizon=settings.forecast_steps,
         step_interval_minutes=settings.step_interval_minutes,
     )
+
+
+@router.post("/model/reload")
+async def reload_model(request: Request) -> dict:
+    """Hot-reload the model from disk without restarting the service."""
+    model_manager = request.app.state.model_manager
+    try:
+        result = model_manager.reload(settings.model_path)
+        return {"status": "reloaded", "details": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Model reload failed: {e}")
+
+
+@router.post("/model/shadow/load")
+async def load_shadow_model(request: Request, path: str = "models/shadow_model.pkl") -> dict:
+    """Load a shadow/challenger model for A/B comparison."""
+    from pathlib import Path
+
+    model_manager = request.app.state.model_manager
+
+    # Validate path is within allowed model directory
+    resolved = Path(path).resolve()
+    allowed_dir = Path(settings.model_path).resolve().parent if settings.model_path else Path("/app/models").resolve()
+    if not resolved.is_relative_to(allowed_dir):
+        raise HTTPException(status_code=400, detail="Model path must be within the models directory")
+
+    try:
+        model_manager.load_shadow(path)
+        return {"status": "shadow_loaded", "path": path}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/model/shadow/promote")
+async def promote_shadow(request: Request) -> dict:
+    """Promote shadow model to primary."""
+    model_manager = request.app.state.model_manager
+    if not model_manager.has_shadow:
+        raise HTTPException(status_code=404, detail="No shadow model loaded")
+    model_manager.promote_shadow()
+    return {"status": "promoted", "new_primary_path": model_manager._model_path}
+
+
+@router.delete("/model/shadow")
+async def remove_shadow(request: Request) -> dict:
+    """Remove the loaded shadow model."""
+    model_manager = request.app.state.model_manager
+    model_manager.remove_shadow()
+    return {"status": "shadow_removed"}

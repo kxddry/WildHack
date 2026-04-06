@@ -1,0 +1,14 @@
+fastapi==0.115.12
+uvicorn[standard]==0.34.2
+httpx==0.28.1
+asyncpg==0.30.0
+sqlalchemy[asyncio]==2.0.40
+psycopg2-binary==2.9.10
+pydantic==2.11.3
+pydantic-settings==2.9.1
+lightgbm==4.6.0
+pandas==2.2.3
+numpy==2.2.6
+scikit-learn==1.6.1
+joblib==1.5.0
+prometheus-fastapi-instrumentator==7.0.2

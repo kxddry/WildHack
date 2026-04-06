@@ -51,7 +51,15 @@ async def save_transport_requests(requests: list[dict]) -> None:
                 "VALUES "
                 "(:warehouse_id, :time_slot_start, :time_slot_end, "
                 ":total_containers, :truck_capacity, :buffer_pct, "
-                ":trucks_needed, :calculation, :status)"
+                ":trucks_needed, :calculation, :status) "
+                "ON CONFLICT (warehouse_id, time_slot_start, time_slot_end) "
+                "DO UPDATE SET "
+                "total_containers = EXCLUDED.total_containers, "
+                "truck_capacity = EXCLUDED.truck_capacity, "
+                "buffer_pct = EXCLUDED.buffer_pct, "
+                "trucks_needed = EXCLUDED.trucks_needed, "
+                "calculation = EXCLUDED.calculation, "
+                "updated_at = NOW()"
             ),
             [
                 {
