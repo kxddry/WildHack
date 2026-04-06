@@ -38,6 +38,7 @@ async def lifespan(app: FastAPI):
     orchestrator = PipelineOrchestrator(http_client=http_client)
     quality_checker = QualityChecker(http_client=http_client)
     quality_checker._retrain_url = settings.retraining_service_url
+    quality_checker._promote_threshold = settings.shadow_promote_streak_threshold
     backfill_runner = BackfillRunner()
 
     # Attach to app state so routes can access them

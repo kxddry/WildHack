@@ -18,5 +18,8 @@ class Settings(BaseSettings):
     batch_size: int = 50  # routes per batch call
     forecast_hours_ahead: int = 6  # hours ahead for dispatch window
 
+    # Shadow model auto-promotion: promote after this many consecutive wins
+    shadow_promote_streak_threshold: int = 3
+
 
 settings = Settings()

@@ -458,3 +458,96 @@ class ModelTrainer:
     ) -> bool:
         """Return True if challenger is better (lower combined score) than champion."""
         return challenger_score < champion_score
+
+    # ------------------------------------------------------------------
+    # 7. Save static aggregations and fill values
+    # ------------------------------------------------------------------
+
+    def save_static_aggs(
+        self,
+        raw_df: pd.DataFrame,
+        features_df: pd.DataFrame,
+        output_dir: str,
+    ) -> None:
+        """Compute and save static aggregations and fill values from training data.
+
+        These artifacts are used by InferenceFeatureEngine to stay in sync with
+        the latest training distribution, preventing training-serving feature skew.
+
+        raw_df: raw route_status_history data (used for group agg computation)
+        features_df: full feature matrix after build_features (used for fill values)
+        output_dir: directory to write static_aggs.json and fill_values.json
+        """
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+
+        # Build intermediate df with time + inventory features (matches InferenceFeatureEngine)
+        prep_df = _add_time_features(raw_df.copy())
+        prep_df = _add_total_status_features(prep_df)
+
+        # Static agg feature sets (must match InferenceFeatureEngine constants)
+        static_agg_features = [f"status_{i}" for i in range(1, 9)]
+        static_group_keys_list = [
+            ["route_id"], ["office_from_id"], ["route_id", "dow"], ["route_id", "pod"],
+        ]
+        total_inventory_agg_features = [
+            "total_inventory", "early_inventory", "mid_inventory", "late_inventory",
+            "early_share", "mid_share", "late_share", "status_entropy",
+        ]
+        total_inventory_group_keys_list = [
+            ["route_id"], ["office_from_id"],
+            ["route_id", "dow"], ["route_id", "pod"], ["route_id", "slot"],
+        ]
+
+        # Build per-key mapping: key_name → (group_keys, combined feature list)
+        key_config: dict[str, tuple[list[str], list[str]]] = {}
+        for group_keys in static_group_keys_list:
+            key_name = "_and_".join(group_keys)
+            feats = key_config.get(key_name, (group_keys, []))[1]
+            new_feats = [f for f in static_agg_features if f in prep_df.columns and f not in feats]
+            key_config[key_name] = (group_keys, feats + new_feats)
+        for group_keys in total_inventory_group_keys_list:
+            key_name = "_and_".join(group_keys)
+            feats = key_config.get(key_name, (group_keys, []))[1]
+            new_feats = [f for f in total_inventory_agg_features if f in prep_df.columns and f not in feats]
+            key_config[key_name] = (group_keys, feats + new_feats)
+
+        # Compute aggregations per key group
+        static_aggs: dict[str, list] = {}
+        for key_name, (group_keys, feature_cols) in key_config.items():
+            # All group keys must exist — partial groupby would produce wrong semantics
+            # since InferenceFeatureEngine parses the key name to determine merge columns.
+            if not all(k in prep_df.columns for k in group_keys) or not feature_cols:
+                logger.debug("Skipping static agg %s — missing group key columns", key_name)
+                continue
+            available_keys = group_keys
+            agg_df = prep_df.groupby(available_keys)[feature_cols].agg(["mean", "std"])
+            agg_df.columns = [f"{col}_{stat}" for col, stat in agg_df.columns]
+            agg_df = agg_df.reset_index().fillna(0.0)
+            static_aggs[key_name] = agg_df.to_dict(orient="records")
+
+        static_aggs_path = output_path / "static_aggs.json"
+        with open(static_aggs_path, "w") as fh:
+            json.dump(static_aggs, fh)
+        logger.info(
+            "Saved %d static aggregation tables to %s", len(static_aggs), static_aggs_path
+        )
+
+        # Compute fill values: median of numeric features from full feature matrix
+        drop_cols = {"timestamp", "route_id", "office_from_id", TARGET, "horizon_minutes"}
+        numeric_cols = [
+            c for c in features_df.select_dtypes(include="number").columns
+            if c not in drop_cols
+        ]
+        fill_values: dict[str, float] = {}
+        for col in numeric_cols:
+            median_val = features_df[col].median()
+            if not pd.isna(median_val):
+                fill_values[col] = float(median_val)
+
+        fill_values_path = output_path / "fill_values.json"
+        with open(fill_values_path, "w") as fh:
+            json.dump(fill_values, fh)
+        logger.info(
+            "Saved fill values (%d features) to %s", len(fill_values), fill_values_path
+        )

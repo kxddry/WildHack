@@ -100,6 +100,14 @@ async def trigger_retrain(request: Request) -> dict:
                 None, trainer.save_model, model, version, metrics
             )
 
+            # 4b. Recompute static aggregations and fill values from fresh training data
+            try:
+                await loop.run_in_executor(
+                    None, trainer.save_static_aggs, raw_df, features_df, settings.model_output_dir
+                )
+            except Exception:
+                logger.exception("Failed to save static aggs — training continues without update")
+
             # 5. Get current champion for comparison
             champion = await registry.get_champion()
             challenger_score = metrics["combined_score"]

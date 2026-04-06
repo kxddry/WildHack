@@ -115,14 +115,15 @@ async def get_forecast_actual_pairs(since: datetime) -> list[dict[str, Any]]:
             text(
                 """
                 WITH expanded AS (
-                    SELECT f.route_id, f.anchor_ts,
+                    SELECT f.route_id, f.anchor_ts, f.model_version,
                            (elem->>'predicted_value')::double precision AS predicted,
                            (elem->>'timestamp')::timestamp AS step_ts
                     FROM forecasts f,
                          jsonb_array_elements(f.forecasts) AS elem
                     WHERE f.created_at >= :since
                 )
-                SELECT e.route_id, e.predicted, h.target_2h AS actual, e.anchor_ts AS forecast_ts
+                SELECT e.route_id, e.predicted, h.target_2h AS actual,
+                       e.anchor_ts AS forecast_ts, e.model_version
                 FROM expanded e
                 JOIN route_status_history h
                     ON h.route_id = e.route_id
