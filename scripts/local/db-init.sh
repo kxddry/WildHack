@@ -1,77 +1,48 @@
 #!/usr/bin/env bash
-# Initialize the local Postgres database used by the WildHack stack.
+# Bring up Postgres + apply migrations via docker compose.
 #
-# Prerequisites
-# -------------
-#   - Postgres is running on $PG_HOST:$PG_PORT (this script does NOT start it)
-#   - psql is on PATH
-#   - The current Unix user can connect to the 'postgres' maintenance DB with
-#     superuser rights (the default for Homebrew installs). Override via
-#     POSTGRES_SUPERUSER_DSN if that's not the case.
+# In the hybrid local-dev setup, Postgres is the ONLY thing that stays
+# containerized — every application service runs on the host via
+# scripts/local/up.sh. This script is the bridge: it starts the postgres
+# container, waits for it to be ready, then runs the one-shot db-migrate
+# sidecar defined in infrastructure/docker-compose.yml.
 #
-# Install Postgres first:
-#   macOS:  brew install postgresql@16 && brew services start postgresql@16
-#   Debian: sudo apt install postgresql && sudo service postgresql start
-#
-# Idempotent. Creates the wildhack role + database if missing, then applies
-# init.sql and every file under infrastructure/postgres/migrations/ in
-# lexical order.
+# Idempotent. Re-running after schema changes applies any new migrations.
 
 . "$(dirname "$0")/_common.sh"
 
-command -v psql >/dev/null 2>&1 || die "psql not found in PATH. Install Postgres first (see header of $0)."
+COMPOSE_FILE="$REPO_ROOT/infrastructure/docker-compose.yml"
 
-# Default superuser DSN matches Homebrew on macOS (current user owns the
-# cluster). On Debian/apt you'd typically `sudo -u postgres` — in that case
-# set POSTGRES_SUPERUSER_DSN explicitly before running this script.
-SUPER_DSN="${POSTGRES_SUPERUSER_DSN:-postgres://$(id -un)@${PG_HOST}:${PG_PORT}/postgres}"
+command -v docker >/dev/null 2>&1 \
+  || die "docker not found in PATH. Install Docker Desktop, colima, or OrbStack."
+docker compose version >/dev/null 2>&1 \
+  || die "'docker compose' subcommand not available — update your Docker install."
 
-log "Checking Postgres reachability at $PG_HOST:$PG_PORT"
-if ! pg_isready -h "$PG_HOST" -p "$PG_PORT" >/dev/null 2>&1; then
-  die "Postgres not reachable at $PG_HOST:$PG_PORT. Start it first (see header of $0)."
-fi
+log "Starting postgres container ($COMPOSE_FILE)"
+docker compose -f "$COMPOSE_FILE" up -d postgres
 
-# ── Role ─────────────────────────────────────────────────────────────
-log "Ensuring role '$PG_USER' exists"
-role_exists=$(psql "$SUPER_DSN" -tAc "SELECT 1 FROM pg_roles WHERE rolname='$PG_USER'" 2>/dev/null || true)
-if [ -z "$role_exists" ]; then
-  psql "$SUPER_DSN" -v ON_ERROR_STOP=1 -c \
-    "CREATE ROLE $PG_USER LOGIN PASSWORD '$PG_PASSWORD'" >/dev/null
-  ok "role '$PG_USER' created"
-else
-  ok "role '$PG_USER' already exists"
-fi
-
-# ── Database ─────────────────────────────────────────────────────────
-log "Ensuring database '$PG_DB' exists"
-db_exists=$(psql "$SUPER_DSN" -tAc "SELECT 1 FROM pg_database WHERE datname='$PG_DB'" 2>/dev/null || true)
-if [ -z "$db_exists" ]; then
-  psql "$SUPER_DSN" -v ON_ERROR_STOP=1 -c \
-    "CREATE DATABASE $PG_DB OWNER $PG_USER" >/dev/null
-  ok "database '$PG_DB' created"
-else
-  ok "database '$PG_DB' already exists"
-fi
-
-psql "$SUPER_DSN" -v ON_ERROR_STOP=1 -c \
-  "GRANT ALL PRIVILEGES ON DATABASE $PG_DB TO $PG_USER" >/dev/null
-
-# ── Schema + migrations (run as the app user, so ownership is correct) ─
-APP_DSN="postgres://${PG_USER}:${PG_PASSWORD}@${PG_HOST}:${PG_PORT}/${PG_DB}"
-
-log "Applying infrastructure/postgres/init.sql"
-PGPASSWORD="$PG_PASSWORD" psql "$APP_DSN" -v ON_ERROR_STOP=1 -q \
-  -f "$REPO_ROOT/infrastructure/postgres/init.sql"
-ok "init.sql applied"
-
-log "Applying migrations"
-count=0
-for f in "$REPO_ROOT/infrastructure/postgres/migrations/"*.sql; do
-  [ -e "$f" ] || continue
-  log "  -> $(basename "$f")"
-  PGPASSWORD="$PG_PASSWORD" psql "$APP_DSN" -v ON_ERROR_STOP=1 -q -f "$f"
-  count=$((count + 1))
+# docker compose's --wait flag is v2+ only; fall back to an explicit
+# pg_isready poll from inside the container so we don't have to special-case
+# docker versions. The helper is guaranteed to exist — db-migrate uses the
+# same postgres:16-alpine image.
+log "Waiting for postgres to accept connections"
+ready=0
+for _ in $(seq 1 60); do
+  if docker compose -f "$COMPOSE_FILE" exec -T postgres \
+       pg_isready -U "$PG_USER" -d "$PG_DB" >/dev/null 2>&1; then
+    ready=1
+    break
+  fi
+  sleep 1
 done
-ok "$count migration(s) applied"
+[ "$ready" -eq 1 ] || die "postgres did not become ready within 60s — check 'docker compose logs postgres'"
+ok "postgres is ready"
 
-ok "Database ready — DSN: postgresql://${PG_USER}:***@${PG_HOST}:${PG_PORT}/${PG_DB}"
+# docker compose run spawns a one-shot container using the db-migrate service
+# definition (same image, same volume mounts, same entrypoint/command from
+# docker-compose.yml). --rm removes it on exit so we don't pile up dead
+# containers across re-runs.
+log "Applying migrations via db-migrate sidecar"
+docker compose -f "$COMPOSE_FILE" run --rm db-migrate
+
+ok "Database ready at 127.0.0.1:${PG_PORT} — DSN: postgresql://${PG_USER}:***@${PG_HOST}:${PG_PORT}/${PG_DB}"

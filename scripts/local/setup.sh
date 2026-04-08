@@ -20,10 +20,12 @@ command -v node >/dev/null 2>&1 || die "Node.js not found. Install via 'brew ins
 command -v npm  >/dev/null 2>&1 || die "npm not found (should ship with Node)."
 log "Node:   $(node --version)   npm: $(npm --version)"
 
-if ! command -v psql >/dev/null 2>&1; then
-  warn "psql client not found — db-init.sh will fail until you install Postgres."
-  warn "  macOS:   brew install postgresql@16 && brew services start postgresql@16"
-  warn "  Debian:  sudo apt install postgresql && sudo service postgresql start"
+if ! command -v docker >/dev/null 2>&1; then
+  warn "docker not found — db-init.sh will fail until Docker is installed."
+  warn "  macOS:   Install Docker Desktop, colima, or OrbStack"
+  warn "  Debian:  sudo apt install docker.io && sudo systemctl start docker"
+elif ! docker compose version >/dev/null 2>&1; then
+  warn "'docker compose' subcommand not available — update Docker to v2+."
 fi
 
 # ── 2. Per-service Python venvs ──────────────────────────────────────

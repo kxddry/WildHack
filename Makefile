@@ -1,20 +1,28 @@
-# WildHack — local-dev convenience targets (no Docker required).
+# WildHack — hybrid local-dev convenience targets.
+#
+# Postgres + db-migrate run inside docker-compose (the only pieces that need
+# containers). Every application service (prediction, dispatcher, scheduler,
+# retraining, dashboard) runs on the host via scripts/local/*.sh — which
+# means fast reloads, native debugging, and no image rebuilds.
 #
 # Typical first-time workflow:
-#   make setup     # install venvs + node modules + Playwright Chromium
-#   make db-init   # create wildhack role + DB + schema (needs local Postgres)
+#   make setup     # install venvs + node modules + Playwright
+#   make db-init   # docker compose up postgres + apply migrations
 #   make e2e       # full end-to-end: up → pytest → down
 #
 # Iterate without restarting every time:
-#   make up && make e2e-keep    # leaves stack running for re-runs
+#   make up && make e2e-keep    # leaves host stack running for re-runs
 #   make status                 # check what's alive
 #   make logs                   # tail all service logs
-#   make down                   # stop everything
+#   make down                   # stop host services (postgres stays up)
+#   make db-down                # stop postgres container too
+#   make db-reset                # drop postgres volume and re-apply schema
 
 SHELL := /usr/bin/env bash
 SCRIPTS := scripts/local
+COMPOSE := docker compose -f infrastructure/docker-compose.yml
 
-.PHONY: help setup db-init up down status logs e2e e2e-keep e2e-smoke e2e-dashboard clean
+.PHONY: help setup db-init db-down db-reset up down status logs e2e e2e-keep e2e-smoke e2e-dashboard clean
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z0-9_-]+:.*?## / {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -22,10 +30,17 @@ help: ## Show this help
 setup: ## One-time: create per-service venvs, install deps, install Playwright
 	@$(SCRIPTS)/setup.sh
 
-db-init: ## Create wildhack role/DB, apply init.sql + migrations
+db-init: ## Start postgres container + apply migrations (one-shot db-migrate)
 	@$(SCRIPTS)/db-init.sh
 
-up: ## Start the full stack (4 FastAPI services + Next.js dashboard)
+db-down: ## Stop the postgres container (data volume is preserved)
+	@$(COMPOSE) stop postgres
+
+db-reset: ## Drop postgres volume + re-apply schema (DESTROYS data)
+	@$(COMPOSE) down -v postgres
+	@$(SCRIPTS)/db-init.sh
+
+up: ## Start the 4 FastAPI services + Next.js dashboard on the host
 	@$(SCRIPTS)/up.sh
 
 down: ## Stop everything started by `make up`
@@ -49,9 +64,11 @@ e2e-smoke: ## Only run tests/e2e/test_smoke.py (no Playwright)
 e2e-dashboard: ## Only run the Playwright dashboard tests
 	@$(SCRIPTS)/e2e.sh --dashboard
 
-clean: ## Remove venvs and run-state (does NOT drop the database)
+clean: ## Remove host venvs + run state. Stops postgres. Preserves DB volume.
 	@$(SCRIPTS)/down.sh || true
+	@$(COMPOSE) stop postgres 2>/dev/null || true
 	@rm -rf .local services/prediction-service/.venv services/dispatcher-service/.venv \
 	        services/scheduler-service/.venv services/retraining-service/.venv \
 	        services/dashboard-next/node_modules/.local-setup-stamp
-	@echo "Cleaned local venvs, run state, and Playwright browsers."
+	@echo "Cleaned host venvs, run state, and Playwright browsers."
+	@echo "Postgres data volume is preserved — use 'make db-reset' to wipe it."
