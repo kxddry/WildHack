@@ -59,7 +59,7 @@ graph LR
 
 ```bash
 # Клонирование репозитория
-git clone <repo-url> && cd WildHack
+git clone https://github.com/kxddry/WildHack && cd WildHack
 
 # Запуск всех сервисов
 cd infrastructure
