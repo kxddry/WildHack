@@ -11,7 +11,7 @@ import {
   Legend,
   ResponsiveContainer,
 } from "recharts";
-import { Activity, Percent, TrendingUp, Database } from "lucide-react";
+import { Activity, Percent, TrendingUp, Database, AlertTriangle } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Select,
@@ -20,6 +20,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Skeleton } from "@/components/ui/skeleton";
 import { KpiCard } from "@/components/kpi-card";
 import { TOOLTIP_STYLE, AXIS_STYLE, CHART_COLORS } from "@/lib/chart-theme";
 import type {
@@ -209,11 +211,18 @@ export default function QualityPage() {
         </p>
       </div>
 
-      {error && <p className="text-red-500 text-sm">Ошибка: {error}</p>}
+      {error ? (
+        <Alert variant="destructive">
+          <AlertTriangle />
+          <AlertTitle>Раздел качества недоступен</AlertTitle>
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      ) : null}
 
       {loading ? (
-        <div className="h-32 flex items-center justify-center text-muted-foreground">
-          Загрузка...
+        <div className="space-y-4">
+          <Skeleton className="h-32 w-full" />
+          <Skeleton className="h-64 w-full" />
         </div>
       ) : (
         <>
@@ -344,9 +353,7 @@ export default function QualityPage() {
             </CardHeader>
             <CardContent>
               {loadingHistory ? (
-                <div className="h-64 flex items-center justify-center text-muted-foreground">
-                  Загрузка...
-                </div>
+                <Skeleton className="h-64 w-full" />
               ) : chartData.length === 0 ? (
                 <div className="h-64 flex items-center justify-center text-muted-foreground">
                   Нет истории для выбранного маршрута

@@ -17,6 +17,7 @@ import {
   Database,
   Target,
   Gauge,
+  AlertTriangle,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -27,6 +28,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Skeleton } from "@/components/ui/skeleton";
 import { KpiCard } from "@/components/kpi-card";
 import { TOOLTIP_STYLE, AXIS_STYLE, CHART_COLORS } from "@/lib/chart-theme";
 import type { BusinessMetrics, Warehouse } from "@/lib/types";
@@ -80,7 +83,12 @@ export default function OverviewPage() {
     return (
       <div className="space-y-6">
         <h1 className="text-2xl font-bold">Обзор</h1>
-        <p className="text-muted-foreground">Загрузка...</p>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} className="h-24 w-full" />
+          ))}
+        </div>
+        <Skeleton className="h-64 w-full" />
       </div>
     );
   }
@@ -89,7 +97,11 @@ export default function OverviewPage() {
     return (
       <div className="space-y-6">
         <h1 className="text-2xl font-bold">Обзор</h1>
-        <p className="text-red-500">Ошибка: {error}</p>
+        <Alert variant="destructive">
+          <AlertTriangle />
+          <AlertTitle>Раздел обзора недоступен</AlertTitle>
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
       </div>
     );
   }
@@ -134,9 +146,16 @@ export default function OverviewPage() {
         </CardHeader>
         <CardContent>
           {metricsError ? (
-            <p className="text-sm text-red-500">Ошибка: {metricsError}</p>
+            <Alert variant="destructive">
+              <AlertTriangle />
+              <AlertTitle>Метрики недоступны</AlertTitle>
+              <AlertDescription>{metricsError}</AlertDescription>
+            </Alert>
           ) : metrics === null ? (
-            <p className="text-sm text-muted-foreground">Загрузка…</p>
+            <div className="space-y-2">
+              <Skeleton className="h-4 w-32" />
+              <Skeleton className="h-4 w-48" />
+            </div>
           ) : (
             <div className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

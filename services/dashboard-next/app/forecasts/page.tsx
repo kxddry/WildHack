@@ -11,7 +11,7 @@ import {
   Legend,
   ResponsiveContainer,
 } from "recharts";
-import { TrendingUp, GitBranch, Box, Tag } from "lucide-react";
+import { TrendingUp, GitBranch, Box, Tag, AlertTriangle } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Select,
@@ -28,6 +28,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Skeleton } from "@/components/ui/skeleton";
 import { KpiCard } from "@/components/kpi-card";
 import { TOOLTIP_STYLE, AXIS_STYLE, CHART_COLORS } from "@/lib/chart-theme";
 import type { Warehouse, Forecast, ForecastStep } from "@/lib/types";
@@ -191,7 +193,13 @@ export default function ForecastsPage() {
         </div>
       </div>
 
-      {error && <p className="text-red-500 text-sm">Ошибка: {error}</p>}
+      {error ? (
+        <Alert variant="destructive">
+          <AlertTriangle />
+          <AlertTitle>Прогнозы недоступны</AlertTitle>
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      ) : null}
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
         <KpiCard
@@ -218,9 +226,7 @@ export default function ForecastsPage() {
         </CardHeader>
         <CardContent className="pr-2">
           {loadingForecasts ? (
-            <div className="h-64 flex items-center justify-center text-muted-foreground">
-              Загрузка...
-            </div>
+            <Skeleton className="h-64 w-full" />
           ) : chartData.length === 0 ? (
             <div className="h-64 flex items-center justify-center text-muted-foreground">
               Данные прогнозов недоступны

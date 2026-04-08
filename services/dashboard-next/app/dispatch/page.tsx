@@ -12,7 +12,14 @@ import {
   ResponsiveContainer,
   Cell,
 } from "recharts";
-import { Truck, RefreshCw, Package, CheckCircle, XCircle } from "lucide-react";
+import {
+  Truck,
+  RefreshCw,
+  Package,
+  CheckCircle,
+  Send,
+  AlertTriangle,
+} from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Select,
@@ -31,8 +38,10 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Skeleton } from "@/components/ui/skeleton";
 import { KpiCard } from "@/components/kpi-card";
-import { StatusBadge } from "@/components/status-badge";
+import { StatusBadge } from "@/lib/status-badge";
 import { TOOLTIP_STYLE, AXIS_STYLE, STATUS_COLORS } from "@/lib/chart-theme";
 import type { Warehouse, TransportRequest } from "@/lib/types";
 
@@ -223,7 +232,13 @@ export default function DispatchPage() {
         </div>
       </div>
 
-      {error && <p className="text-red-500 text-sm">Ошибка: {error}</p>}
+      {error ? (
+        <Alert variant="destructive">
+          <AlertTriangle />
+          <AlertTitle>Ошибка диспетчеризации</AlertTitle>
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      ) : null}
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
         <KpiCard title="Всего грузовиков" value={totalTrucks} icon={Truck} />
@@ -237,7 +252,7 @@ export default function DispatchPage() {
           title="Отправлено"
           value={dispatched}
           subtitle="заявок"
-          icon={XCircle}
+          icon={Send}
         />
         <KpiCard
           title="Всего контейнеров"
@@ -252,9 +267,7 @@ export default function DispatchPage() {
         </CardHeader>
         <CardContent>
           {loadingRequests ? (
-            <div className="h-64 flex items-center justify-center text-muted-foreground">
-              Загрузка...
-            </div>
+            <Skeleton className="h-64 w-full" />
           ) : chartData.length === 0 ? (
             <div className="h-64 flex items-center justify-center text-muted-foreground">
               Нет данных — сначала запустите диспетчеризацию
