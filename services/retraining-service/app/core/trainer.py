@@ -22,6 +22,7 @@ import numpy as np
 import pandas as pd
 
 from app.config import settings
+from app.core.baseline import NaiveSeasonalBaseline
 from app.storage import postgres as db
 
 logger = logging.getLogger(__name__)
@@ -364,12 +365,63 @@ class ModelTrainer:
         metrics["train_rows"] = int(len(X_train))
         metrics["val_rows"] = int(len(X_val))
 
+        # Naive seasonal baseline (PRD §9.3) — fitted on the same train split
+        # and evaluated on the same OOT validation set so the delta against
+        # the LightGBM model is directly comparable.
+        try:
+            baseline_metrics = self._train_and_evaluate_baseline(
+                features_df, train_mask, val_mask, target
+            )
+            metrics["baseline"] = baseline_metrics
+            metrics["baseline_combined_score"] = baseline_metrics["combined_score"]
+            metrics["wape_vs_baseline"] = round(
+                baseline_metrics["wape"] - metrics["wape"], 6
+            )
+            metrics["rbias_vs_baseline"] = round(
+                baseline_metrics["rbias"] - metrics["rbias"], 6
+            )
+            logger.info(
+                "Baseline (mean by route_id x hour x dow) — WAPE=%.4f, RBias=%.4f, "
+                "combined=%.4f, n_groups=%d, coverage=%.2f",
+                baseline_metrics["wape"],
+                baseline_metrics["rbias"],
+                baseline_metrics["combined_score"],
+                baseline_metrics["n_groups"],
+                baseline_metrics["coverage"],
+            )
+        except Exception as exc:
+            # Persist a sentinel so downstream consumers can distinguish
+            # "baseline failed for this run" from "baseline never ran".
+            logger.exception("Baseline evaluation failed — model metrics still returned")
+            metrics["baseline"] = {"error": str(exc), "status": "failed"}
+            metrics["baseline_combined_score"] = None
+            metrics["wape_vs_baseline"] = None
+            metrics["rbias_vs_baseline"] = None
+
         self._last_metrics = metrics
         logger.info(
             "Training complete — WAPE=%.4f, RBias=%.4f, combined=%.4f",
             metrics["wape"], metrics["rbias"], metrics["combined_score"],
         )
         return model, metrics
+
+    def _train_and_evaluate_baseline(
+        self,
+        features_df: pd.DataFrame,
+        train_mask: pd.Series,
+        val_mask: pd.Series,
+        target: str,
+    ) -> dict[str, float]:
+        """Fit and score the naive seasonal baseline on the same OOT split."""
+        required_cols = ["timestamp", "route_id", target]
+        missing = [c for c in required_cols if c not in features_df.columns]
+        if missing:
+            raise ValueError(f"Baseline requires columns {missing}")
+
+        train_slice = features_df.loc[train_mask, required_cols]
+        val_slice = features_df.loc[val_mask, required_cols]
+        baseline = NaiveSeasonalBaseline().fit(train_slice, target=target)
+        return baseline.evaluate(val_slice, target=target).to_dict()
 
     # ------------------------------------------------------------------
     # 4. Evaluate model
@@ -440,6 +492,10 @@ class ModelTrainer:
             "best_iteration": metrics.get("best_iteration"),
             "train_rows": metrics.get("train_rows"),
             "val_rows": metrics.get("val_rows"),
+            "baseline": metrics.get("baseline"),
+            "baseline_combined_score": metrics.get("baseline_combined_score"),
+            "wape_vs_baseline": metrics.get("wape_vs_baseline"),
+            "rbias_vs_baseline": metrics.get("rbias_vs_baseline"),
         }
         with open(metadata_path, "w") as fh:
             json.dump(metadata, fh, indent=2)

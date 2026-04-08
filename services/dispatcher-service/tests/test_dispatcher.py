@@ -1,10 +1,8 @@
 """Unit tests for DispatchCalculator."""
 
 import math
-from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
+from datetime import timedelta
 
-import pytest
 
 from app.core.dispatcher import DispatchCalculator
 
@@ -258,3 +256,100 @@ class TestCreateFullDispatch:
         assert "truck_capacity" in config_out
         assert "buffer_pct" in config_out
         assert "min_trucks" in config_out
+
+
+# ---------------------------------------------------------------------------
+# apply_antiflap_filter (PRD §7.3 — antiflapping)
+# ---------------------------------------------------------------------------
+
+
+def _slot(warehouse_id: int, base_dt, hour_offset: int, trucks: int) -> dict:
+    start = base_dt + timedelta(hours=hour_offset)
+    end = start + timedelta(hours=2)
+    return {
+        "warehouse_id": warehouse_id,
+        "time_slot_start": start,
+        "time_slot_end": end,
+        "trucks_needed": trucks,
+        "total_containers": float(trucks) * 33,
+        "truck_capacity": 33,
+        "buffer_pct": 0.1,
+        "calculation": "test",
+        "status": "planned",
+    }
+
+
+class TestApplyAntiflapFilter:
+    def test_no_previous_request_always_saved(self, base_dt):
+        new_req = _slot(1, base_dt, 0, trucks=4)
+        to_save, to_skip = DispatchCalculator.apply_antiflap_filter(
+            new_requests=[new_req], existing_trucks={}
+        )
+        assert len(to_save) == 1
+        assert to_skip == []
+
+    def test_skips_when_delta_is_zero(self, base_dt):
+        new_req = _slot(1, base_dt, 0, trucks=5)
+        existing = {(1, new_req["time_slot_start"], new_req["time_slot_end"]): 5}
+        to_save, to_skip = DispatchCalculator.apply_antiflap_filter(
+            new_requests=[new_req], existing_trucks=existing
+        )
+        assert to_save == []
+        assert len(to_skip) == 1
+
+    def test_skips_when_delta_is_one(self, base_dt):
+        new_req = _slot(1, base_dt, 0, trucks=5)
+        existing = {(1, new_req["time_slot_start"], new_req["time_slot_end"]): 4}
+        to_save, to_skip = DispatchCalculator.apply_antiflap_filter(
+            new_requests=[new_req], existing_trucks=existing
+        )
+        assert to_save == []
+        assert len(to_skip) == 1
+
+    def test_skips_when_delta_is_negative_one(self, base_dt):
+        new_req = _slot(1, base_dt, 0, trucks=5)
+        existing = {(1, new_req["time_slot_start"], new_req["time_slot_end"]): 6}
+        to_save, to_skip = DispatchCalculator.apply_antiflap_filter(
+            new_requests=[new_req], existing_trucks=existing
+        )
+        assert to_save == []
+        assert len(to_skip) == 1
+
+    def test_saves_when_delta_exceeds_threshold(self, base_dt):
+        new_req = _slot(1, base_dt, 0, trucks=7)
+        existing = {(1, new_req["time_slot_start"], new_req["time_slot_end"]): 4}
+        to_save, to_skip = DispatchCalculator.apply_antiflap_filter(
+            new_requests=[new_req], existing_trucks=existing
+        )
+        assert len(to_save) == 1
+        assert to_skip == []
+
+    def test_mixed_batch_partitions_correctly(self, base_dt):
+        # First slot: previously 4, new 5 → skip (|delta|=1)
+        # Second slot: previously 4, new 8 → save (|delta|=4)
+        # Third slot: no previous → save
+        first = _slot(1, base_dt, 0, trucks=5)
+        second = _slot(1, base_dt, 2, trucks=8)
+        third = _slot(2, base_dt, 4, trucks=3)
+        existing = {
+            (1, first["time_slot_start"], first["time_slot_end"]): 4,
+            (1, second["time_slot_start"], second["time_slot_end"]): 4,
+        }
+        to_save, to_skip = DispatchCalculator.apply_antiflap_filter(
+            new_requests=[first, second, third], existing_trucks=existing
+        )
+        saved_keys = {(r["warehouse_id"], r["time_slot_start"]) for r in to_save}
+        skipped_keys = {(r["warehouse_id"], r["time_slot_start"]) for r in to_skip}
+        assert (1, second["time_slot_start"]) in saved_keys
+        assert (2, third["time_slot_start"]) in saved_keys
+        assert (1, first["time_slot_start"]) in skipped_keys
+
+    def test_threshold_override(self, base_dt):
+        # With threshold=0, even |delta|=1 should be saved.
+        new_req = _slot(1, base_dt, 0, trucks=5)
+        existing = {(1, new_req["time_slot_start"], new_req["time_slot_end"]): 4}
+        to_save, to_skip = DispatchCalculator.apply_antiflap_filter(
+            new_requests=[new_req], existing_trucks=existing, threshold=0
+        )
+        assert len(to_save) == 1
+        assert to_skip == []

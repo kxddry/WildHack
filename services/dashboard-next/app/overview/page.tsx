@@ -10,7 +10,14 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
-import { Warehouse as WarehouseIcon, Route, Truck, Database } from "lucide-react";
+import {
+  Warehouse as WarehouseIcon,
+  Route,
+  Truck,
+  Database,
+  Target,
+  Gauge,
+} from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Table,
@@ -22,10 +29,12 @@ import {
 } from "@/components/ui/table";
 import { KpiCard } from "@/components/kpi-card";
 import { TOOLTIP_STYLE, AXIS_STYLE, CHART_COLORS } from "@/lib/chart-theme";
-import type { Warehouse } from "@/lib/types";
+import type { BusinessMetrics, Warehouse } from "@/lib/types";
 
 export default function OverviewPage() {
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
+  const [metrics, setMetrics] = useState<BusinessMetrics | null>(null);
+  const [metricsError, setMetricsError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -38,6 +47,16 @@ export default function OverviewPage() {
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
+
+    fetch("/api/metrics/business")
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.error) throw new Error(data.error);
+        setMetrics(data as BusinessMetrics);
+      })
+      .catch((e) =>
+        setMetricsError(e instanceof Error ? e.message : "Metrics unavailable")
+      );
   }, []);
 
   const totalRoutes = warehouses.reduce(
@@ -108,6 +127,51 @@ export default function OverviewPage() {
           icon={Database}
         />
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Business KPIs (PRD §9.2)</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {metricsError ? (
+            <p className="text-sm text-red-500">Error: {metricsError}</p>
+          ) : metrics === null ? (
+            <p className="text-sm text-muted-foreground">Loading…</p>
+          ) : (
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <KpiCard
+                  title="Order accuracy (±1 truck)"
+                  value={
+                    metrics.n_slots_evaluated > 0
+                      ? `${(metrics.order_accuracy * 100).toFixed(1)}%`
+                      : "—"
+                  }
+                  subtitle={`${metrics.n_slots_evaluated} of ${metrics.n_slots_total} slots evaluated`}
+                  icon={Target}
+                />
+                <KpiCard
+                  title="Avg truck utilization"
+                  value={
+                    metrics.n_slots_evaluated > 0
+                      ? `${(metrics.avg_truck_utilization * 100).toFixed(1)}%`
+                      : "—"
+                  }
+                  subtitle={
+                    metrics.truck_capacity > 0
+                      ? `capacity = ${metrics.truck_capacity} units / truck`
+                      : "no fulfilment data yet"
+                  }
+                  icon={Gauge}
+                />
+              </div>
+              {metrics.note && (
+                <p className="text-xs text-muted-foreground">{metrics.note}</p>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

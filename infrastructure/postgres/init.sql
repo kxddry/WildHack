@@ -50,6 +50,8 @@ CREATE TABLE IF NOT EXISTS transport_requests (
     calculation     TEXT,
     status          VARCHAR(32) NOT NULL DEFAULT 'planned'
                     CHECK (status IN ('planned', 'dispatched', 'completed', 'cancelled')),
+    actual_vehicles INTEGER,
+    actual_units    DOUBLE PRECISION,
     created_at      TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMP DEFAULT NOW(),
     UNIQUE (warehouse_id, time_slot_start, time_slot_end)
@@ -57,6 +59,9 @@ CREATE TABLE IF NOT EXISTS transport_requests (
 
 CREATE INDEX IF NOT EXISTS idx_requests_warehouse_slot ON transport_requests (warehouse_id, time_slot_start);
 CREATE INDEX IF NOT EXISTS idx_requests_status ON transport_requests (status);
+CREATE INDEX IF NOT EXISTS idx_requests_actuals
+    ON transport_requests (warehouse_id, time_slot_start)
+    WHERE actual_vehicles IS NOT NULL;
 
 -- Model metadata table (includes known categorical values for inference)
 CREATE TABLE IF NOT EXISTS model_metadata (

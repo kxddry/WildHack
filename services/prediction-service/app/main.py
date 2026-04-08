@@ -59,5 +59,8 @@ app.add_middleware(
 )
 
 app.include_router(router)
+# Versioned API surface required by PRD §6 — exposed in addition to the
+# legacy un-prefixed paths for backward compatibility with existing clients.
+app.include_router(router, prefix="/api/v1")
 
 Instrumentator().instrument(app).expose(app)

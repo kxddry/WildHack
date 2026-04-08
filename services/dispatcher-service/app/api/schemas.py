@@ -51,3 +51,59 @@ class HealthResponse(BaseModel):
     status: str
     database_connected: bool
     uptime_seconds: float
+
+
+# ---------------------------------------------------------------------------
+# PRD §6.2 — GET /api/v1/transport-requests
+# ---------------------------------------------------------------------------
+
+
+class TransportRequestPRD(BaseModel):
+    """Transport request shape mandated by PRD §6.2."""
+
+    id: int
+    office_from_id: int
+    time_window_start: datetime
+    time_window_end: datetime
+    routes: list[int]
+    total_predicted_units: float
+    vehicles_required: int
+    status: str
+    created_at: datetime
+
+
+class TransportRequestsListResponse(BaseModel):
+    items: list[TransportRequestPRD]
+    total: int
+    office_id: int
+    range_from: datetime
+    range_to: datetime
+
+
+# ---------------------------------------------------------------------------
+# Business metrics (PRD §9.2)
+# ---------------------------------------------------------------------------
+
+
+class BusinessMetricsResponse(BaseModel):
+    """Two business KPIs surfaced to the dashboard (PRD §9.2).
+
+    * ``order_accuracy``: share of fulfilled slots where the predicted
+      vehicle count is within ±1 of the actual one. The ±1 tolerance
+      *includes* the corner case ``actual=0, predicted=1`` — sending one
+      empty truck still counts as accurate enough; the cost of that
+      empty trip is captured separately by ``avg_truck_utilization``,
+      which drops toward zero when trucks roll empty. The two metrics
+      are complementary on purpose.
+    * ``avg_truck_utilization``: mean of ``actual_units / (vehicles * capacity)``
+      across slots that actually shipped.
+    """
+
+    order_accuracy: float
+    avg_truck_utilization: float
+    n_slots_evaluated: int
+    n_slots_total: int
+    truck_capacity: int
+    range_from: datetime | None = None
+    range_to: datetime | None = None
+    note: str | None = None

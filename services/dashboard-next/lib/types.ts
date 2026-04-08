@@ -70,3 +70,15 @@ export interface HealthCheck {
   status: CheckStatus;
   detail: string;
 }
+
+// PRD §9.2 — business KPIs surfaced by GET /api/v1/metrics/business
+export interface BusinessMetrics {
+  order_accuracy: number;
+  avg_truck_utilization: number;
+  n_slots_evaluated: number;
+  n_slots_total: number;
+  truck_capacity: number;
+  range_from: string | null;
+  range_to: string | null;
+  note: string | null;
+}
