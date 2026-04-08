@@ -50,9 +50,11 @@ warehouse_rows="$(db_count warehouses)"
 route_rows="$(db_count routes)"
 forecast_rows="$(db_count forecasts)"
 request_rows="$(db_count transport_requests)"
+did_seed_history=0
 
 if [ "${history_rows:-0}" -eq 0 ] || [ "${warehouse_rows:-0}" -eq 0 ] || [ "${route_rows:-0}" -eq 0 ]; then
   bootstrap_dataset >/dev/null
+  did_seed_history=1
   history_rows="$(db_count route_status_history)"
   warehouse_rows="$(db_count warehouses)"
   route_rows="$(db_count routes)"
@@ -60,7 +62,13 @@ if [ "${history_rows:-0}" -eq 0 ] || [ "${warehouse_rows:-0}" -eq 0 ] || [ "${ro
   request_rows="$(db_count transport_requests)"
 fi
 
-if [ "${forecast_rows:-0}" -eq 0 ] || [ "${request_rows:-0}" -eq 0 ]; then
+if [ "$did_seed_history" -eq 1 ]; then
+  historical_ts="$(historical_reference_ts)"
+  [ -n "$historical_ts" ] || die "Failed to derive historical replay timestamp from route_status_history"
+  trigger_pipeline "$historical_ts" >/dev/null
+  trigger_backfill >/dev/null
+  trigger_pipeline >/dev/null
+elif [ "${forecast_rows:-0}" -eq 0 ] || [ "${request_rows:-0}" -eq 0 ]; then
   trigger_pipeline >/dev/null
 fi
 

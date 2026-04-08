@@ -2,7 +2,7 @@
 
 import json
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import text
@@ -65,28 +65,42 @@ async def get_active_routes() -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
-async def get_latest_statuses(route_ids: list[int]) -> list[dict[str, Any]]:
+def _strip_tz(value: datetime) -> datetime:
+    if value.tzinfo is not None:
+        return value.astimezone(UTC).replace(tzinfo=None)
+    return value
+
+
+async def get_latest_statuses(
+    route_ids: list[int],
+    as_of: datetime | None = None,
+) -> list[dict[str, Any]]:
     """Return the most recent status row per route from route_status_history.
 
     Uses DISTINCT ON to get one row per route_id, ordered by timestamp DESC.
     """
     if not route_ids:
         return []
+    where_clauses = ["route_id = ANY(:route_ids)"]
+    params: dict[str, Any] = {"route_ids": route_ids}
+    if as_of is not None:
+        where_clauses.append("timestamp <= :as_of")
+        params["as_of"] = _strip_tz(as_of)
     engine = _get_engine()
     async with engine.connect() as conn:
         result = await conn.execute(
             text(
-                """
+                f"""
                 SELECT DISTINCT ON (route_id)
                     route_id, warehouse_id, timestamp,
                     status_1, status_2, status_3, status_4,
                     status_5, status_6, status_7, status_8
                 FROM route_status_history
-                WHERE route_id = ANY(:route_ids)
+                WHERE {' AND '.join(where_clauses)}
                 ORDER BY route_id, timestamp DESC
                 """
             ),
-            {"route_ids": route_ids},
+            params,
         )
         rows = result.mappings().all()
     return [dict(r) for r in rows]
@@ -133,7 +147,7 @@ async def get_forecast_actual_pairs(since: datetime) -> list[dict[str, Any]]:
                 LIMIT 10000
                 """
             ),
-            {"since": since.replace(tzinfo=None) if since.tzinfo else since},
+            {"since": _strip_tz(since)},
         )
         rows = result.mappings().all()
     return [dict(r) for r in rows]
@@ -211,6 +225,81 @@ async def backfill_target_2h() -> int:
             )
         )
     return result.rowcount
+
+
+async def backfill_transport_request_actuals(step_interval_minutes: int) -> int:
+    """Backfill actual fulfilment into mature ``transport_requests`` rows."""
+    if step_interval_minutes <= 0:
+        raise ValueError(
+            f"step_interval_minutes must be positive, got {step_interval_minutes}"
+        )
+
+    step_seconds = step_interval_minutes * 60
+    engine = _get_engine()
+    async with engine.begin() as conn:
+        result = await conn.execute(
+            text(
+                """
+                WITH actuals AS (
+                    SELECT
+                        warehouse_id,
+                        (
+                            TIMESTAMP 'epoch'
+                            + FLOOR(EXTRACT(EPOCH FROM timestamp) / :step_seconds)
+                                * :step_seconds * INTERVAL '1 second'
+                        ) AS canonical_slot_start,
+                        SUM(target_2h) AS actual_units
+                    FROM route_status_history
+                    WHERE target_2h IS NOT NULL
+                    GROUP BY warehouse_id, canonical_slot_start
+                ),
+                candidate_requests AS (
+                    SELECT
+                        id,
+                        warehouse_id,
+                        truck_capacity,
+                        status,
+                        (
+                            TIMESTAMP 'epoch'
+                            + FLOOR(EXTRACT(EPOCH FROM time_slot_start) / :step_seconds)
+                                * :step_seconds * INTERVAL '1 second'
+                        ) AS canonical_slot_start
+                    FROM transport_requests
+                    WHERE (actual_units IS NULL OR actual_vehicles IS NULL)
+                      AND status <> 'cancelled'
+                ),
+                matched AS (
+                    SELECT
+                        c.id,
+                        a.actual_units,
+                        CASE
+                            WHEN a.actual_units <= 0 OR c.truck_capacity <= 0 THEN 0
+                            ELSE CEIL(
+                                a.actual_units / c.truck_capacity::double precision
+                            )::integer
+                        END AS actual_vehicles,
+                        CASE
+                            WHEN c.status IN ('planned', 'dispatched') THEN 'completed'
+                            ELSE c.status
+                        END AS next_status
+                    FROM candidate_requests c
+                    JOIN actuals a
+                      ON a.warehouse_id = c.warehouse_id
+                     AND a.canonical_slot_start = c.canonical_slot_start
+                    WHERE c.canonical_slot_start <= NOW() - INTERVAL '2 hours'
+                )
+                UPDATE transport_requests tr
+                SET actual_units = matched.actual_units,
+                    actual_vehicles = matched.actual_vehicles,
+                    status = matched.next_status,
+                    updated_at = NOW()
+                FROM matched
+                WHERE tr.id = matched.id
+                """
+            ),
+            {"step_seconds": step_seconds},
+        )
+    return int(result.rowcount or 0)
 
 
 async def save_quality_check(metrics: dict) -> None:

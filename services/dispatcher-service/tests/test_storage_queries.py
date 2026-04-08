@@ -73,3 +73,37 @@ def test_transport_requests_window_query_supports_legacy_ts(monkeypatch) -> None
 
     assert rows[0]["routes"] == [101, 202]
     assert "COALESCE(elem ->> 'timestamp', elem ->> 'ts')::timestamp AS step_ts" in conn.statements[0]
+
+
+def test_get_all_warehouses_aggregates_each_source_in_subqueries(monkeypatch) -> None:
+    conn = _FakeConn(
+        [
+            {
+                "warehouse_id": 42,
+                "name": "North Hub",
+                "route_count": 15,
+                "latest_forecast_at": datetime(2025, 6, 1, 12, 30, 0),
+                "upcoming_trucks": 7,
+            }
+        ]
+    )
+    monkeypatch.setattr(postgres, "get_engine", lambda: _FakeEngine(conn))
+
+    rows = asyncio.run(postgres.get_all_warehouses())
+
+    assert rows == [
+        {
+            "warehouse_id": 42,
+            "name": "North Hub",
+            "route_count": 15,
+            "latest_forecast_at": datetime(2025, 6, 1, 12, 30, 0),
+            "upcoming_trucks": 7,
+        }
+    ]
+    statement = conn.statements[0]
+    assert "LEFT JOIN routes r ON r.warehouse_id = w.warehouse_id" not in statement
+    assert "LEFT JOIN forecasts f ON f.warehouse_id = w.warehouse_id" not in statement
+    assert "LEFT JOIN transport_requests tr ON tr.warehouse_id = w.warehouse_id" not in statement
+    assert "SELECT warehouse_id, COUNT(DISTINCT route_id) AS route_count" in statement
+    assert "SELECT warehouse_id, MAX(created_at) AS latest_forecast_at" in statement
+    assert "SELECT warehouse_id, COALESCE(SUM(trucks_needed), 0) AS upcoming_trucks" in statement

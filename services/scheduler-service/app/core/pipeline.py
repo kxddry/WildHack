@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 
 from app.config import settings
+from app.core.time_slots import snap_to_step
 
 logger = logging.getLogger(__name__)
 
@@ -28,13 +29,23 @@ class PipelineOrchestrator:
             "run_count": self._run_count,
         }
 
-    async def run_prediction_cycle(self, from_db: Any) -> dict[str, Any]:
+    async def run_prediction_cycle(
+        self,
+        from_db: Any,
+        reference_ts: datetime | None = None,
+    ) -> dict[str, Any]:
         """Execute: fetch latest statuses → batch predict → auto-dispatch."""
         self._run_count += 1
         run_start = datetime.utcnow()
+        anchor_ts = snap_to_step(
+            reference_ts or run_start,
+            settings.step_interval_minutes,
+        )
         result: dict[str, Any] = {
             "run_id": self._run_count,
             "started_at": run_start.isoformat(),
+            "reference_ts": reference_ts.isoformat() if reference_ts else None,
+            "anchor_ts": anchor_ts.isoformat(),
             "steps": [],
         }
 
@@ -49,22 +60,22 @@ class PipelineOrchestrator:
                 return result
 
             route_ids = [r["route_id"] for r in routes]
-            statuses = await from_db.get_latest_statuses(route_ids)
+            statuses = await from_db.get_latest_statuses(route_ids, as_of=anchor_ts)
             result["steps"].append(
                 {
                     "step": "fetch_statuses",
                     "status": "ok",
+                    "anchor_ts": anchor_ts.isoformat(),
                     "routes_found": len(routes),
                     "statuses_found": len(statuses),
                 }
             )
 
             # Step 2: Build batch prediction request
-            now = datetime.utcnow()
             predictions = [
                 {
                     "route_id": row["route_id"],
-                    "timestamp": now.isoformat(),
+                    "timestamp": anchor_ts.isoformat(),
                     "status_1": row.get("status_1", 0.0),
                     "status_2": row.get("status_2", 0.0),
                     "status_3": row.get("status_3", 0.0),
@@ -103,8 +114,8 @@ class PipelineOrchestrator:
             # Step 4: Auto-dispatch for each warehouse
             warehouses = await from_db.get_distinct_warehouses()
             dispatch_count = 0
-            time_range_start = now
-            time_range_end = now + timedelta(hours=settings.forecast_hours_ahead)
+            time_range_start = anchor_ts
+            time_range_end = anchor_ts + timedelta(hours=settings.forecast_hours_ahead)
 
             for wh_id in warehouses:
                 try:
@@ -132,6 +143,7 @@ class PipelineOrchestrator:
                 {
                     "step": "auto_dispatch",
                     "status": "ok",
+                    "anchor_ts": anchor_ts.isoformat(),
                     "warehouses_total": len(warehouses),
                     "warehouses_dispatched": dispatch_count,
                 }

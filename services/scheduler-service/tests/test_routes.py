@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -71,6 +72,26 @@ def test_pipeline_trigger_accepts_valid_token(client) -> None:
     assert response.status_code == 200
     assert response.json() == {"status": "pipeline_ok"}
     assert orchestrator.run_prediction_cycle.await_count == 1
+    assert orchestrator.run_prediction_cycle.await_args.kwargs == {
+        "from_db": test_client.app.state.db,
+        "reference_ts": None,
+    }
+
+
+def test_pipeline_trigger_passes_reference_ts_query_param(client) -> None:
+    test_client, orchestrator, _quality_checker = client
+
+    response = test_client.post(
+        "/pipeline/trigger?reference_ts=2026-04-08T21:09:17",
+        headers={"X-Internal-Token": "internal-secret"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "pipeline_ok"}
+    assert orchestrator.run_prediction_cycle.await_args.kwargs == {
+        "from_db": test_client.app.state.db,
+        "reference_ts": datetime(2026, 4, 8, 21, 9, 17),
+    }
 
 
 def test_quality_trigger_accepts_valid_token(client) -> None:

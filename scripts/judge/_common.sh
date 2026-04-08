@@ -71,6 +71,7 @@ load_env() {
   DASHBOARD_PORT="${DASHBOARD_PORT:-4000}"
   PROMETHEUS_PORT="${PROMETHEUS_PORT:-9090}"
   GRAFANA_PORT="${GRAFANA_PORT:-3001}"
+  STEP_INTERVAL_MINUTES="${STEP_INTERVAL_MINUTES:-30}"
 
   DATA_INGEST_TOKEN="${DATA_INGEST_TOKEN:-}"
   INTERNAL_API_TOKEN="${INTERNAL_API_TOKEN:-}"
@@ -105,6 +106,13 @@ db_count() {
     | tr -d '[:space:]'
 }
 
+db_query_value() {
+  local sql="$1"
+  compose exec -T postgres \
+    psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "$sql" \
+    | tr -d '[:space:]'
+}
+
 bootstrap_dataset() {
   local dataset="$REPO_ROOT/Data/raw/train_team_track.parquet"
   [ -f "$dataset" ] || die "Bootstrap dataset not found at $dataset"
@@ -122,18 +130,79 @@ bootstrap_dataset() {
 }
 
 trigger_pipeline() {
+  local reference_ts="${1:-}"
   [ -n "$INTERNAL_API_TOKEN" ] || die "INTERNAL_API_TOKEN is empty in .env"
 
-  log "Triggering initial prediction and dispatch cycle"
+  local url="http://127.0.0.1:${SCHEDULER_PORT}/pipeline/trigger"
+  if [ -n "$reference_ts" ]; then
+    url="${url}?reference_ts=${reference_ts}"
+    log "Triggering prediction and dispatch cycle for reference_ts=${reference_ts}"
+  else
+    log "Triggering prediction and dispatch cycle"
+  fi
+
   local response
   response=$(
     curl -fsS \
       -X POST \
       -H "X-Internal-Token: $INTERNAL_API_TOKEN" \
-      "http://127.0.0.1:${SCHEDULER_PORT}/pipeline/trigger"
+      "$url"
   ) || die "Pipeline trigger failed"
   ok "Prediction + dispatch cycle completed"
   printf "%s\n" "$response"
+}
+
+historical_reference_ts() {
+  local step_seconds=$((STEP_INTERVAL_MINUTES * 60))
+  db_query_value "
+    SELECT to_char(
+      TIMESTAMP 'epoch'
+      + FLOOR(
+          EXTRACT(EPOCH FROM (MAX(timestamp) - INTERVAL '7 hours'))
+          / ${step_seconds}
+        ) * ${step_seconds} * INTERVAL '1 second',
+      'YYYY-MM-DD\"T\"HH24:MI:SS'
+    )
+    FROM route_status_history;
+  "
+}
+
+trigger_backfill() {
+  log "Running immediate scheduler backfill for actuals"
+  compose exec -T scheduler-service python - <<'PY' || die "Immediate backfill failed"
+import asyncio
+
+from app.config import settings
+from app.storage.postgres import (
+    backfill_target_2h,
+    backfill_transport_request_actuals,
+    close_engine,
+    create_engine_pool,
+)
+
+
+async def main() -> None:
+    await create_engine_pool(settings.database_url)
+    try:
+        target_rows = await backfill_target_2h()
+        request_rows = await backfill_transport_request_actuals(
+            settings.step_interval_minutes
+        )
+        print(
+            {
+                "status": "ok",
+                "target_rows_updated": target_rows,
+                "request_rows_updated": request_rows,
+                "rows_updated": target_rows + request_rows,
+            }
+        )
+    finally:
+        await close_engine()
+
+
+asyncio.run(main())
+PY
+  ok "Immediate backfill completed"
 }
 
 print_urls() {

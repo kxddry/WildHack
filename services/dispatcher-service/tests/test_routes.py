@@ -65,6 +65,36 @@ class TestHealthEndpoint:
         assert response.json()["status"] == "healthy"
 
 
+class TestWarehousesEndpoint:
+    def test_returns_warehouse_summary_shape(self, client):
+        sample_row = {
+            "warehouse_id": 42,
+            "name": "North Hub",
+            "route_count": 15,
+            "latest_forecast_at": "2025-06-01T12:30:00",
+            "upcoming_trucks": 7,
+        }
+        with patch(
+            "app.api.routes.postgres.get_all_warehouses",
+            new_callable=AsyncMock,
+            return_value=[sample_row],
+        ):
+            response = client.get("/warehouses")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["total"] == 1
+        assert body["warehouses"] == [
+            {
+                "warehouse_id": 42,
+                "name": "North Hub",
+                "route_count": 15,
+                "latest_forecast_at": "2025-06-01T12:30:00",
+                "upcoming_trucks": 7,
+            }
+        ]
+
+
 # ---------------------------------------------------------------------------
 # /api/v1/transport-requests (PRD §6.2)
 # ---------------------------------------------------------------------------

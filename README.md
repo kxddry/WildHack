@@ -71,7 +71,7 @@ graph LR
 
 ### Запуск для жюри / демо
 
-Рекомендуемый сценарий для показа: одна команда поднимает весь Docker-стек, при необходимости создаёт `.env` из шаблона, загружает приложенный Team Track snapshot в БД и делает первый `predict + dispatch`, чтобы дашборд не был пустым.
+Рекомендуемый сценарий для показа: одна команда поднимает весь Docker-стек, при необходимости создаёт `.env` из шаблона, загружает приложенный Team Track snapshot в БД, прогоняет один historical replay для уже-оцениваемого окна, сразу backfill'ит actuals и затем делает текущий `predict + dispatch`. На чистом старте это гарантирует непустые Business KPI в Overview, а не только Forecasts / Dispatch.
 
 ```bash
 git clone https://github.com/kxddry/WildHack && cd WildHack
@@ -83,8 +83,9 @@ make judge-up
 1. Поднимает весь стек через Docker Compose.
 2. Ждёт health-check'и сервисов.
 3. Если БД пустая, загружает `Data/raw/train_team_track.parquet`.
-4. Если ещё нет прогнозов и заявок, запускает первый scheduler cycle.
-5. Печатает готовые URL.
+4. На чистой БД запускает historical scheduler cycle на прошлом окне, сразу backfill'ит `transport_requests.actual_*` и переводит matured requests в `completed`.
+5. Затем запускает обычный current scheduler cycle, чтобы были и completed historical requests, и свежие planned/dispatched слоты.
+6. Печатает готовые URL.
 
 Полезные команды:
 
@@ -210,7 +211,7 @@ trucks = max(min_trucks, ceil(total_containers * (1 + buffer_pct) / truck_capaci
 | Метод | Эндпоинт | Назначение |
 |-------|----------|-----------|
 | GET | `/pipeline/status` | Текущий статус оркестратора и quality checker |
-| POST | `/pipeline/trigger` | Ручной запуск цикла predict + dispatch (`X-Internal-Token`) |
+| POST | `/pipeline/trigger?reference_ts=` | Ручной запуск цикла predict + dispatch; `reference_ts` опционален и нужен для historical/internal replay (`X-Internal-Token`) |
 | GET | `/pipeline/history?limit=` | Аудит-лог запусков из `pipeline_runs` |
 | POST | `/quality/trigger` | Внеочередной расчёт качества (`X-Internal-Token`) |
 | GET | `/quality/alerts` | Активные алерты по дрейфу качества |
@@ -219,7 +220,7 @@ trucks = max(min_trucks, ceil(total_containers * (1 + buffer_pct) / truck_capaci
 Внутри Scheduler работают три APScheduler-задачи:
 - **prediction_cycle** — каждые `PREDICTION_INTERVAL_MINUTES` (по умолчанию 30 мин)
 - **quality_check** — каждые `QUALITY_CHECK_INTERVAL_MINUTES` (по умолчанию 60 мин); промоутит shadow → primary после `SHADOW_PROMOTE_STREAK_THRESHOLD` (3) подряд побед
-- **backfill_target_2h** — каждые 30 мин, дописывает фактический `target_2h` в `route_status_history` и `transport_requests.actual_*`
+- **backfill_target_2h** — каждые 30 мин, дописывает фактический `target_2h` в `route_status_history`, backfill'ит `transport_requests.actual_*` по каноническим слотам и переводит matured requests в `completed`
 
 ### Retraining Service (:8003)
 

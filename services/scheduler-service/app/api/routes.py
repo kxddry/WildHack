@@ -2,8 +2,9 @@
 
 import logging
 import time
+from datetime import datetime
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 
 from app.api.security import require_internal_token
 
@@ -37,11 +38,23 @@ async def pipeline_status(request: Request) -> dict:
 
 
 @router.post("/pipeline/trigger", dependencies=[Depends(require_internal_token)])
-async def trigger_pipeline(request: Request) -> dict:
+async def trigger_pipeline(
+    request: Request,
+    reference_ts: datetime | None = Query(
+        default=None,
+        description=(
+            "Optional reference timestamp for historical/internal replay. "
+            "When omitted, the scheduler uses the current UTC time."
+        ),
+    ),
+) -> dict:
     """Manually trigger a prediction+dispatch cycle (internal-token protected)."""
     orchestrator = request.app.state.orchestrator
     db = request.app.state.db
-    result = await orchestrator.run_prediction_cycle(from_db=db)
+    result = await orchestrator.run_prediction_cycle(
+        from_db=db,
+        reference_ts=reference_ts,
+    )
     return result
 
 

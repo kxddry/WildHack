@@ -437,7 +437,7 @@ PRD §9.2 — два бизнес-KPI, считаются только по сл
 |--------|----------|-----------|
 | `prediction_cycle` | `PREDICTION_INTERVAL_MINUTES` (30) | predict + dispatch цикл |
 | `quality_check` | `QUALITY_CHECK_INTERVAL_MINUTES` (60) | WAPE/RBias + автопромоут shadow по streak |
-| `backfill_target_2h` | 30 | Дописывает фактические значения в `route_status_history` и `transport_requests.actual_*` |
+| `backfill_target_2h` | 30 | Дописывает фактические значения в `route_status_history`, затем backfill'ит `transport_requests.actual_*` по каноническим слотам и завершает matured requests |
 
 ### GET /pipeline/status
 
@@ -469,12 +469,16 @@ PRD §9.2 — два бизнес-KPI, считаются только по сл
 
 Требует заголовок `X-Internal-Token`.
 
+Опциональный query-параметр `reference_ts` позволяет прогнать цикл на историческом anchor-time. Scheduler снапает его вниз до канонической сетки `STEP_INTERVAL_MINUTES` и использует тот же snapped timestamp и для `/predict/batch`, и для dispatch window.
+
 **Ответ (200):** результат прогона (зависит от орчестратора), пример:
 
 ```json
 {
     "status": "success",
     "started_at": "2026-04-02T12:35:00",
+    "reference_ts": "2026-04-02T12:39:17",
+    "anchor_ts": "2026-04-02T12:30:00",
     "finished_at": "2026-04-02T12:35:08",
     "routes_processed": 73,
     "transport_requests_created": 12

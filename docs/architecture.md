@@ -158,13 +158,13 @@ scheduler-service/
 
 | Задача | Интервал | Что делает |
 |--------|----------|-----------|
-| `prediction_cycle` | `PREDICTION_INTERVAL_MINUTES` (30) | Подбирает свежие наблюдения, дёргает `/predict/batch`, потом `/dispatch` |
+| `prediction_cycle` | `PREDICTION_INTERVAL_MINUTES` (30) | Снапает anchor-time на каноническую сетку, подбирает статусы `as of` этого времени, дёргает `/predict/batch`, потом `/dispatch` |
 | `quality_check` | `QUALITY_CHECK_INTERVAL_MINUTES` (60) | Считает WAPE+RBias по `forecasts` vs `route_status_history.target_2h`, сохраняет в `prediction_quality`, проверяет shadow-streak и при достижении `SHADOW_PROMOTE_STREAK_THRESHOLD` (3) дёргает `POST /retrain` |
-| `backfill_target_2h` | 30 | Дописывает фактический `target_2h` в `route_status_history` и `transport_requests.actual_*` |
+| `backfill_target_2h` | 30 | Дописывает фактический `target_2h` в `route_status_history`, затем backfill'ит `transport_requests.actual_*` по каноническому бакету и переводит matured requests в `completed` |
 
 **HTTP API** (для оператора и UI):
 - `GET /pipeline/status` — снапшот состояния оркестратора и quality checker
-- `POST /pipeline/trigger` — внеочередной запуск цикла (`X-Internal-Token`)
+- `POST /pipeline/trigger?reference_ts=` — внеочередной запуск цикла; `reference_ts` опционален и нужен для historical/internal replay (`X-Internal-Token`)
 - `GET /pipeline/history?limit=` — аудит-лог из `pipeline_runs`
 - `POST /quality/trigger` (`X-Internal-Token`) / `GET /quality/alerts`
 
