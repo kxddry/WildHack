@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python-services:
+    name: ${{ matrix.service }} (lint + tests)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - prediction-service
+          - dispatcher-service
+          - scheduler-service
+          - retraining-service
+    defaults:
+      run:
+        working-directory: services/${{ matrix.service }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: services/${{ matrix.service }}/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+          pip install ruff pytest pytest-asyncio
+
+      - name: Lint with ruff
+        run: ruff check .
+
+      - name: Run pytest
+        run: |
+          if [ -d tests ]; then
+            pytest -q --maxfail=1 tests
+          else
+            echo "No tests/ directory in this service - skipping pytest"
+          fi

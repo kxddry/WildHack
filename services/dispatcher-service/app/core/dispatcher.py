@@ -1,6 +1,14 @@
+import logging
 import math
 from collections import defaultdict
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
+
+# Antiflapping threshold: if |new - prev| trucks_needed is at most this many,
+# the previous request stays unchanged. Prevents request churn from small
+# forecast jitter (PRD §7.3).
+ANTIFLAP_DELTA_THRESHOLD = 1
 
 
 class DispatchCalculator:
@@ -102,6 +110,54 @@ class DispatchCalculator:
                 }
             )
         return requests
+
+    @staticmethod
+    def apply_antiflap_filter(
+        new_requests: list[dict],
+        existing_trucks: dict[tuple[int, datetime, datetime], int],
+        threshold: int = ANTIFLAP_DELTA_THRESHOLD,
+    ) -> tuple[list[dict], list[dict]]:
+        """Split new dispatch requests into (to_save, to_skip).
+
+        For every new request, look up the previously stored ``trucks_needed``
+        for the same ``(warehouse_id, time_slot_start, time_slot_end)`` triple.
+
+        Decision rule (PRD §7.3 — antiflapping):
+
+        * No previous request → always save (first decision for the slot).
+        * ``|new.trucks_needed - prev.trucks_needed| <= threshold`` → skip,
+          keep the previous value to avoid request churn from small jitter.
+        * Otherwise → save (significant change worth re-dispatching).
+        """
+        to_save: list[dict] = []
+        to_skip: list[dict] = []
+
+        for req in new_requests:
+            key = (
+                req["warehouse_id"],
+                req["time_slot_start"],
+                req["time_slot_end"],
+            )
+            prev_trucks = existing_trucks.get(key)
+            if prev_trucks is None:
+                to_save.append(req)
+                continue
+
+            delta = abs(int(req["trucks_needed"]) - int(prev_trucks))
+            if delta <= threshold:
+                logger.info(
+                    "Antiflap skip warehouse=%s slot=%s prev=%s new=%s delta=%s",
+                    req["warehouse_id"],
+                    req["time_slot_start"],
+                    prev_trucks,
+                    req["trucks_needed"],
+                    delta,
+                )
+                to_skip.append(req)
+            else:
+                to_save.append(req)
+
+        return to_save, to_skip
 
     @staticmethod
     def create_full_dispatch(
