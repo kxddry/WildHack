@@ -203,41 +203,41 @@ export default function QualityPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold">Quality</h1>
+        <h1 className="text-2xl font-bold">Качество</h1>
         <p className="text-muted-foreground text-sm mt-1">
-          Model accuracy and forecast quality metrics
+          Точность модели и метрики качества прогнозов
         </p>
       </div>
 
-      {error && <p className="text-red-500 text-sm">Error: {error}</p>}
+      {error && <p className="text-red-500 text-sm">Ошибка: {error}</p>}
 
       {loading ? (
         <div className="h-32 flex items-center justify-center text-muted-foreground">
-          Loading...
+          Загрузка...
         </div>
       ) : (
         <>
           {modelInfo && (
             <Card>
               <CardHeader>
-                <CardTitle>Model Information</CardTitle>
+                <CardTitle>Информация о модели</CardTitle>
               </CardHeader>
               <CardContent>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
                   <div>
-                    <p className="text-muted-foreground">Version</p>
+                    <p className="text-muted-foreground">Версия</p>
                     <p className="font-mono font-medium">{modelInfo.model_version}</p>
                   </div>
                   <div>
-                    <p className="text-muted-foreground">Type</p>
+                    <p className="text-muted-foreground">Тип</p>
                     <p className="font-medium">{modelInfo.model_type}</p>
                   </div>
                   <div>
-                    <p className="text-muted-foreground">Objective</p>
+                    <p className="text-muted-foreground">Целевая функция</p>
                     <p className="font-medium">{modelInfo.objective}</p>
                   </div>
                   <div>
-                    <p className="text-muted-foreground">CV Score</p>
+                    <p className="text-muted-foreground">CV-скор</p>
                     <p className="font-medium">
                       {modelInfo.cv_score != null
                         ? modelInfo.cv_score.toFixed(4)
@@ -245,19 +245,19 @@ export default function QualityPage() {
                     </p>
                   </div>
                   <div>
-                    <p className="text-muted-foreground">Feature Count</p>
+                    <p className="text-muted-foreground">Кол-во признаков</p>
                     <p className="font-medium">{modelInfo.feature_count}</p>
                   </div>
                   <div>
-                    <p className="text-muted-foreground">Forecast Horizon</p>
-                    <p className="font-medium">{modelInfo.forecast_horizon} steps</p>
+                    <p className="text-muted-foreground">Горизонт прогноза</p>
+                    <p className="font-medium">{modelInfo.forecast_horizon} шагов</p>
                   </div>
                   <div>
-                    <p className="text-muted-foreground">Step Interval</p>
-                    <p className="font-medium">{modelInfo.step_interval_minutes} min</p>
+                    <p className="text-muted-foreground">Интервал шага</p>
+                    <p className="font-medium">{modelInfo.step_interval_minutes} мин</p>
                   </div>
                   <div>
-                    <p className="text-muted-foreground">Training Date</p>
+                    <p className="text-muted-foreground">Дата обучения</p>
                     <p className="font-medium">
                       {modelInfo.training_date
                         ? new Date(modelInfo.training_date).toLocaleDateString()
@@ -276,7 +276,7 @@ export default function QualityPage() {
                 onValueChange={setSelectedWarehouse}
               >
                 <SelectTrigger>
-                  <SelectValue placeholder="Select warehouse" />
+                  <SelectValue placeholder="Выберите склад" />
                 </SelectTrigger>
                 <SelectContent>
                   {warehouses.map((w) => (
@@ -284,7 +284,7 @@ export default function QualityPage() {
                       key={w.warehouse_id}
                       value={String(w.warehouse_id)}
                     >
-                      {w.name ?? `Warehouse ${w.warehouse_id}`}
+                      {w.name ?? `Склад ${w.warehouse_id}`}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -298,12 +298,12 @@ export default function QualityPage() {
                 disabled={routes.length === 0}
               >
                 <SelectTrigger>
-                  <SelectValue placeholder="Select route" />
+                  <SelectValue placeholder="Выберите маршрут" />
                 </SelectTrigger>
                 <SelectContent>
                   {routes.map((id) => (
                     <SelectItem key={id} value={String(id)}>
-                      Route {id}
+                      Маршрут {id}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -315,41 +315,41 @@ export default function QualityPage() {
             <KpiCard
               title="WAPE"
               value={pct(metrics.wape)}
-              subtitle="Weighted Abs Pct Error"
+              subtitle="Взвешенная абс. ошибка"
               icon={Percent}
             />
             <KpiCard
-              title="|Relative Bias|"
+              title="|Относительное смещение|"
               value={pct(metrics.rbias)}
-              subtitle="Absolute relative bias"
+              subtitle="Абсолютное относительное смещение"
               icon={Activity}
             />
             <KpiCard
-              title="Combined Score"
+              title="Суммарный скор"
               value={pct(metrics.combined)}
               subtitle="WAPE + |RBias|"
               icon={TrendingUp}
             />
             <KpiCard
-              title="Data Points"
+              title="Точек данных"
               value={metrics.points}
-              subtitle="matched pairs"
+              subtitle="сопоставленных пар"
               icon={Database}
             />
           </div>
 
           <Card>
             <CardHeader>
-              <CardTitle>Route Status History</CardTitle>
+              <CardTitle>История статусов маршрута</CardTitle>
             </CardHeader>
             <CardContent>
               {loadingHistory ? (
                 <div className="h-64 flex items-center justify-center text-muted-foreground">
-                  Loading...
+                  Загрузка...
                 </div>
               ) : chartData.length === 0 ? (
                 <div className="h-64 flex items-center justify-center text-muted-foreground">
-                  No history data for selected route
+                  Нет истории для выбранного маршрута
                 </div>
               ) : (
                 <ResponsiveContainer width="100%" height={320}>
@@ -379,7 +379,7 @@ export default function QualityPage() {
                         key={n}
                         type="monotone"
                         dataKey={`status_${n}`}
-                        name={`Status ${n}`}
+                        name={`Статус ${n}`}
                         stroke={CHART_COLORS[idx % CHART_COLORS.length]}
                         dot={false}
                         strokeWidth={1.5}
@@ -388,7 +388,7 @@ export default function QualityPage() {
                     <Line
                       type="monotone"
                       dataKey="target_2h"
-                      name="Target 2h"
+                      name="Целевое (2ч)"
                       stroke="#ef4444"
                       dot={false}
                       strokeWidth={2.5}

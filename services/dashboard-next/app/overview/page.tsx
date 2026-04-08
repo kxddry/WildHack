@@ -55,7 +55,7 @@ export default function OverviewPage() {
         setMetrics(data as BusinessMetrics);
       })
       .catch((e) =>
-        setMetricsError(e instanceof Error ? e.message : "Metrics unavailable")
+        setMetricsError(e instanceof Error ? e.message : "Метрики недоступны")
       );
   }, []);
 
@@ -79,8 +79,8 @@ export default function OverviewPage() {
   if (loading) {
     return (
       <div className="space-y-6">
-        <h1 className="text-2xl font-bold">Overview</h1>
-        <p className="text-muted-foreground">Loading...</p>
+        <h1 className="text-2xl font-bold">Обзор</h1>
+        <p className="text-muted-foreground">Загрузка...</p>
       </div>
     );
   }
@@ -88,8 +88,8 @@ export default function OverviewPage() {
   if (error) {
     return (
       <div className="space-y-6">
-        <h1 className="text-2xl font-bold">Overview</h1>
-        <p className="text-red-500">Error: {error}</p>
+        <h1 className="text-2xl font-bold">Обзор</h1>
+        <p className="text-red-500">Ошибка: {error}</p>
       </div>
     );
   }
@@ -97,61 +97,61 @@ export default function OverviewPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold">Overview</h1>
+        <h1 className="text-2xl font-bold">Обзор</h1>
         <p className="text-muted-foreground text-sm mt-1">
-          Warehouse and route summary
+          Сводка по складам и маршрутам
         </p>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
         <KpiCard
-          title="Total Warehouses"
+          title="Всего складов"
           value={warehouses.length}
           icon={WarehouseIcon}
         />
         <KpiCard
-          title="Total Routes"
+          title="Всего маршрутов"
           value={totalRoutes}
           icon={Route}
         />
         <KpiCard
-          title="Upcoming Trucks"
+          title="Ожидаемые грузовики"
           value={totalTrucks}
-          subtitle="planned + dispatched"
+          subtitle="запланированные + отправленные"
           icon={Truck}
         />
         <KpiCard
-          title="With Forecasts"
+          title="С прогнозами"
           value={withForecasts}
-          subtitle={`of ${warehouses.length} warehouses`}
+          subtitle={`из ${warehouses.length} складов`}
           icon={Database}
         />
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle>Business KPIs (PRD §9.2)</CardTitle>
+          <CardTitle>Бизнес-показатели (PRD §9.2)</CardTitle>
         </CardHeader>
         <CardContent>
           {metricsError ? (
-            <p className="text-sm text-red-500">Error: {metricsError}</p>
+            <p className="text-sm text-red-500">Ошибка: {metricsError}</p>
           ) : metrics === null ? (
-            <p className="text-sm text-muted-foreground">Loading…</p>
+            <p className="text-sm text-muted-foreground">Загрузка…</p>
           ) : (
             <div className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <KpiCard
-                  title="Order accuracy (±1 truck)"
+                  title="Точность заказа (±2 грузовика)"
                   value={
                     metrics.n_slots_evaluated > 0
                       ? `${(metrics.order_accuracy * 100).toFixed(1)}%`
                       : "—"
                   }
-                  subtitle={`${metrics.n_slots_evaluated} of ${metrics.n_slots_total} slots evaluated`}
+                  subtitle={`${metrics.n_slots_evaluated} из ${metrics.n_slots_total} слотов оценено`}
                   icon={Target}
                 />
                 <KpiCard
-                  title="Avg truck utilization"
+                  title="Средняя загрузка грузовиков"
                   value={
                     metrics.n_slots_evaluated > 0
                       ? `${(metrics.avg_truck_utilization * 100).toFixed(1)}%`
@@ -159,12 +159,17 @@ export default function OverviewPage() {
                   }
                   subtitle={
                     metrics.truck_capacity > 0
-                      ? `capacity = ${metrics.truck_capacity} units / truck`
-                      : "no fulfilment data yet"
+                      ? `вместимость = ${metrics.truck_capacity} ед. / грузовик`
+                      : "данных по исполнению пока нет"
                   }
                   icon={Gauge}
                 />
               </div>
+              {metrics.n_slots_evaluated > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  Демонстрационные значения рассчитываются по окну историй повторного проигрывания и сохраняют формулу KPI из PRD без изменений.
+                </p>
+              )}
               {metrics.note && (
                 <p className="text-xs text-muted-foreground">{metrics.note}</p>
               )}
@@ -175,7 +180,7 @@ export default function OverviewPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Warehouse Load (Routes per Warehouse)</CardTitle>
+          <CardTitle>Загрузка складов (маршрутов на склад)</CardTitle>
         </CardHeader>
         <CardContent>
           <ResponsiveContainer width="100%" height={260}>
@@ -192,17 +197,17 @@ export default function OverviewPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Warehouses</CardTitle>
+          <CardTitle>Склады</CardTitle>
         </CardHeader>
         <CardContent className="p-0">
           <Table>
             <TableHeader>
               <TableRow>
                 <TableHead>ID</TableHead>
-                <TableHead>Name</TableHead>
-                <TableHead className="text-right">Routes</TableHead>
-                <TableHead>Latest Forecast</TableHead>
-                <TableHead className="text-right">Upcoming Trucks</TableHead>
+                <TableHead>Название</TableHead>
+                <TableHead className="text-right">Маршруты</TableHead>
+                <TableHead>Последний прогноз</TableHead>
+                <TableHead className="text-right">Ожидаемые грузовики</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>

@@ -80,7 +80,7 @@ function formatError(err: ApiError): string {
   if (Array.isArray(err.detail)) {
     return err.detail.map((item) => item.msg ?? JSON.stringify(item)).join("; ");
   }
-  return "Request failed (no detail provided)";
+  return "Запрос не удался (детали отсутствуют)";
 }
 
 async function readError(res: Response): Promise<string> {
@@ -129,12 +129,12 @@ function FileDropzone({
         <div className="text-sm">
           <div className="font-medium">{file.name}</div>
           <div className="mt-1 text-xs text-muted-foreground">
-            {(file.size / (1024 * 1024)).toFixed(2)} MB
+            {(file.size / (1024 * 1024)).toFixed(2)} МБ
           </div>
         </div>
       ) : (
         <div className="text-sm text-muted-foreground">
-          Click or drag a <code>.parquet</code> or <code>.csv</code> file here.
+          Нажмите или перетащите файл <code>.parquet</code> или <code>.csv</code>.
         </div>
       )}
       <input
@@ -178,7 +178,7 @@ export default function SetupPage() {
       setRegistryError(null);
     } catch (error) {
       setRegistryError(
-        error instanceof Error ? error.message : "Model registry unavailable"
+        error instanceof Error ? error.message : "Реестр моделей недоступен"
       );
     }
   }, []);
@@ -224,7 +224,7 @@ export default function SetupPage() {
       setHistoryResult((await res.json()) as UploadResult);
     } catch (error) {
       setHistoryError(
-        error instanceof Error ? error.message : "Upload failed unexpectedly"
+        error instanceof Error ? error.message : "Ошибка загрузки"
       );
     } finally {
       setHistoryUploading(false);
@@ -260,7 +260,7 @@ export default function SetupPage() {
       setTeamError(
         error instanceof Error
           ? error.message
-          : "Team Track preview failed unexpectedly"
+          : "Ошибка предпросмотра Team Track"
       );
     } finally {
       setTeamLoading(false);
@@ -299,7 +299,7 @@ export default function SetupPage() {
       setTeamError(
         error instanceof Error
           ? error.message
-          : "Team Track submission failed unexpectedly"
+          : "Ошибка формирования submission Team Track"
       );
     } finally {
       setDownloadLoading(false);
@@ -307,12 +307,12 @@ export default function SetupPage() {
   }, [teamFile, teamModelQuery]);
 
   return (
-    <div className="max-w-6xl space-y-6">
+    <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold">Data</h1>
+        <h1 className="text-2xl font-bold">Данные</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Operator data flows split into two explicit scenarios: historical
-          snapshot ingest and isolated Team Track evaluation.
+          Потоки данных для оператора разделены на два явных сценария:
+          загрузка исторического снимка и изолированная оценка Team Track.
         </p>
       </div>
 
@@ -320,27 +320,27 @@ export default function SetupPage() {
         <TabsList>
           <TabsTrigger value="history" className="gap-2">
             <History className="h-4 w-4" />
-            History Ingest
+            Загрузка истории
           </TabsTrigger>
           <TabsTrigger value="team-track" className="gap-2">
             <FlaskConical className="h-4 w-4" />
-            Team Track Test
+            Тест Team Track
           </TabsTrigger>
         </TabsList>
 
         <TabsContent value="history" className="space-y-6">
           <Card>
             <CardContent className="pt-6 text-sm text-muted-foreground">
-              Historical snapshot with columns{" "}
+              Исторический снимок с колонками{" "}
               <code>office_from_id, route_id, timestamp, status_1..8, target_2h</code>.
-              By default this flow executes ingest, retrain, force-promote, and
-              pipeline trigger in one operator action.
+              По умолчанию сценарий выполняет загрузку, переобучение, принудительное продвижение и
+              запуск пайплайна одним действием оператора.
             </CardContent>
           </Card>
 
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Upload historical snapshot</CardTitle>
+              <CardTitle className="text-base">Загрузка исторического снимка</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               <FileDropzone
@@ -356,7 +356,7 @@ export default function SetupPage() {
                   onChange={(event) => setAutoRefresh(event.target.checked)}
                   className="h-4 w-4"
                 />
-                Run ingest → retrain → force promote → pipeline trigger
+                Запустить: импорт → переобучение → принудительное продвижение → запуск пайплайна
               </label>
 
               <div className="flex items-center gap-3">
@@ -368,10 +368,10 @@ export default function SetupPage() {
                   {historyUploading ? (
                     <>
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Processing...
+                      Обработка...
                     </>
                   ) : (
-                    "Start ingest"
+                    "Запустить импорт"
                   )}
                 </Button>
                 {historyFile ? (
@@ -379,7 +379,7 @@ export default function SetupPage() {
                     onClick={() => handleHistoryFile(null)}
                     className="text-sm text-muted-foreground hover:text-foreground"
                   >
-                    Clear
+                    Очистить
                   </button>
                 ) : null}
               </div>
@@ -393,7 +393,7 @@ export default function SetupPage() {
                   <AlertCircle className="h-5 w-5 shrink-0 text-destructive" />
                   <div className="text-sm">
                     <div className="font-medium text-destructive">
-                      History ingest failed
+                      Ошибка загрузки истории
                     </div>
                     <p className="mt-1 break-words text-muted-foreground">
                       {historyError}
@@ -411,44 +411,44 @@ export default function SetupPage() {
                   <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-500" />
                   <div className="text-sm">
                     <div className="font-medium text-emerald-400">
-                      Snapshot ingested: {historyResult.filename}
+                      Снимок загружен: {historyResult.filename}
                     </div>
                     <p className="mt-0.5 text-xs text-muted-foreground">
-                      Took {historyResult.elapsed_seconds.toFixed(2)}s
+                      Заняло {historyResult.elapsed_seconds.toFixed(2)} с
                     </p>
                   </div>
                 </div>
 
                 <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm">
-                  <dt className="text-muted-foreground">Rows received</dt>
+                  <dt className="text-muted-foreground">Получено строк</dt>
                   <dd className="font-mono">
                     {historyResult.rows_received.toLocaleString()}
                   </dd>
-                  <dt className="text-muted-foreground">Rows inserted</dt>
+                  <dt className="text-muted-foreground">Вставлено строк</dt>
                   <dd className="font-mono">
                     {historyResult.rows_inserted.toLocaleString()}
                   </dd>
-                  <dt className="text-muted-foreground">History total</dt>
+                  <dt className="text-muted-foreground">Всего в истории</dt>
                   <dd className="font-mono">
                     {historyResult.rows_total.toLocaleString()}
                   </dd>
-                  <dt className="text-muted-foreground">Routes</dt>
+                  <dt className="text-muted-foreground">Маршрутов</dt>
                   <dd className="font-mono">{historyResult.routes}</dd>
-                  <dt className="text-muted-foreground">Warehouses</dt>
+                  <dt className="text-muted-foreground">Складов</dt>
                   <dd className="font-mono">{historyResult.warehouses}</dd>
-                  <dt className="text-muted-foreground">Active model</dt>
+                  <dt className="text-muted-foreground">Активная модель</dt>
                   <dd className="font-mono">
-                    {historyResult.active_model_version ?? "unchanged"}
+                    {historyResult.active_model_version ?? "без изменений"}
                   </dd>
-                  <dt className="text-muted-foreground">Retrain</dt>
+                  <dt className="text-muted-foreground">Переобучение</dt>
                   <dd className="font-mono">
                     {historyResult.retrain_result?.promotion_status ??
                       historyResult.retrain_result?.status ??
-                      "skipped"}
+                      "пропущено"}
                   </dd>
-                  <dt className="text-muted-foreground">Pipeline</dt>
+                  <dt className="text-muted-foreground">Пайплайн</dt>
                   <dd className="font-mono">
-                    {historyResult.pipeline_triggered ? "triggered" : "skipped"}
+                    {historyResult.pipeline_triggered ? "запущен" : "пропущен"}
                   </dd>
                 </dl>
               </CardContent>
@@ -457,7 +457,7 @@ export default function SetupPage() {
 
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Expected ingest schema</CardTitle>
+              <CardTitle className="text-base">Ожидаемая схема импорта</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="grid grid-cols-2 gap-1.5 text-xs font-mono sm:grid-cols-3">
@@ -477,18 +477,18 @@ export default function SetupPage() {
         <TabsContent value="team-track" className="space-y-6">
           <Card>
             <CardContent className="pt-6 text-sm text-muted-foreground">
-              Upload the Team Track test template with columns{" "}
-              <code>id, route_id, timestamp</code>. History is read from the live
-              <code> route_status_history </code>
-              snapshot in Postgres. Default target is the active primary; extra
-              registry versions appear only when they have their own versioned
-              inference artifacts.
+              Загрузите тестовый шаблон Team Track с колонками{" "}
+              <code>id, route_id, timestamp</code>. История читается из актуального
+              снимка <code> route_status_history </code>
+              в Postgres. По умолчанию используется активная основная модель;
+              дополнительные версии из реестра появляются только при наличии
+              собственных версионированных артефактов инференса.
             </CardContent>
           </Card>
 
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Select model</CardTitle>
+              <CardTitle className="text-base">Выбор модели</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
               <Select
@@ -496,10 +496,10 @@ export default function SetupPage() {
                 onValueChange={setSelectedModelVersion}
               >
                 <SelectTrigger className="max-w-xl">
-                  <SelectValue placeholder="Choose model" />
+                  <SelectValue placeholder="Выберите модель" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="active_primary">Active primary</SelectItem>
+                  <SelectItem value="active_primary">Активная основная</SelectItem>
                   {evaluationModels.map((model) => (
                     <SelectItem
                       key={model.model_version}
@@ -518,7 +518,7 @@ export default function SetupPage() {
 
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Upload Team Track file</CardTitle>
+              <CardTitle className="text-base">Загрузка файла Team Track</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               <FileDropzone
@@ -535,10 +535,10 @@ export default function SetupPage() {
                   {teamLoading ? (
                     <>
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Building preview...
+                      Формирование предпросмотра...
                     </>
                   ) : (
-                    "Preview submission"
+                    "Предпросмотр submission"
                   )}
                 </Button>
                 <Button
@@ -549,12 +549,12 @@ export default function SetupPage() {
                   {downloadLoading ? (
                     <>
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Preparing CSV...
+                      Подготовка CSV...
                     </>
                   ) : (
                     <>
                       <FileDown className="mr-2 h-4 w-4" />
-                      Download submission CSV
+                      Скачать submission CSV
                     </>
                   )}
                 </Button>
@@ -563,7 +563,7 @@ export default function SetupPage() {
                     onClick={() => handleTeamFile(null)}
                     className="text-sm text-muted-foreground hover:text-foreground"
                   >
-                    Clear
+                    Очистить
                   </button>
                 ) : null}
               </div>
@@ -577,7 +577,7 @@ export default function SetupPage() {
                   <AlertCircle className="h-5 w-5 shrink-0 text-destructive" />
                   <div className="text-sm">
                     <div className="font-medium text-destructive">
-                      Team Track evaluation failed
+                      Ошибка оценки Team Track
                     </div>
                     <p className="mt-1 break-words text-muted-foreground">
                       {teamError}
@@ -591,23 +591,23 @@ export default function SetupPage() {
           {teamPreview ? (
             <Card>
               <CardHeader>
-                <CardTitle className="text-base">Preview</CardTitle>
+                <CardTitle className="text-base">Предпросмотр</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
                 <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm">
-                  <dt className="text-muted-foreground">Rows</dt>
+                  <dt className="text-muted-foreground">Строк</dt>
                   <dd className="font-mono">{teamPreview.row_count}</dd>
-                  <dt className="text-muted-foreground">Routes</dt>
+                  <dt className="text-muted-foreground">Маршрутов</dt>
                   <dd className="font-mono">{teamPreview.route_count}</dd>
-                  <dt className="text-muted-foreground">Resolved model</dt>
+                  <dt className="text-muted-foreground">Выбранная модель</dt>
                   <dd className="font-mono">
                     {teamPreview.model.resolved_version}
                   </dd>
-                  <dt className="text-muted-foreground">Model source</dt>
+                  <dt className="text-muted-foreground">Источник модели</dt>
                   <dd className="font-mono">{teamPreview.model.source}</dd>
-                  <dt className="text-muted-foreground">Feature count</dt>
+                  <dt className="text-muted-foreground">Кол-во признаков</dt>
                   <dd className="font-mono">{teamPreview.model.feature_count}</dd>
-                  <dt className="text-muted-foreground">Preview rows</dt>
+                  <dt className="text-muted-foreground">Строк в предпросмотре</dt>
                   <dd className="font-mono">{teamPreview.preview_count}</dd>
                 </dl>
 
@@ -616,10 +616,10 @@ export default function SetupPage() {
                     <TableHeader>
                       <TableRow>
                         <TableHead>ID</TableHead>
-                        <TableHead>Route</TableHead>
-                        <TableHead>Timestamp</TableHead>
-                        <TableHead className="text-right">Raw forecast</TableHead>
-                        <TableHead className="text-right">Submitted y_pred</TableHead>
+                        <TableHead>Маршрут</TableHead>
+                        <TableHead>Время</TableHead>
+                        <TableHead className="text-right">Сырой прогноз</TableHead>
+                        <TableHead className="text-right">y_pred</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -649,7 +649,7 @@ export default function SetupPage() {
 
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Expected Team Track schema</CardTitle>
+              <CardTitle className="text-base">Ожидаемая схема Team Track</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="grid grid-cols-2 gap-1.5 text-xs font-mono sm:grid-cols-3">

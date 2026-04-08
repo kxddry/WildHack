@@ -16,31 +16,31 @@ const statusConfig: Record<
   { label: string; style: React.CSSProperties }
 > = {
   pass: {
-    label: "Pass",
+    label: "Ок",
     style: { backgroundColor: "#16a34a", color: "#fff", borderColor: "transparent" },
   },
   warn: {
-    label: "Warn",
+    label: "Предупреждение",
     style: { backgroundColor: "#d97706", color: "#fff", borderColor: "transparent" },
   },
   fail: {
-    label: "Fail",
+    label: "Ошибка",
     style: { backgroundColor: "#dc2626", color: "#fff", borderColor: "transparent" },
   },
   planned: {
-    label: "Planned",
+    label: "Запланирован",
     style: { backgroundColor: "#2563eb", color: "#fff", borderColor: "transparent" },
   },
   dispatched: {
-    label: "Dispatched",
+    label: "Отправлен",
     style: { backgroundColor: "#d97706", color: "#fff", borderColor: "transparent" },
   },
   completed: {
-    label: "Completed",
+    label: "Завершён",
     style: { backgroundColor: "#16a34a", color: "#fff", borderColor: "transparent" },
   },
   cancelled: {
-    label: "Cancelled",
+    label: "Отменён",
     style: { backgroundColor: "#dc2626", color: "#fff", borderColor: "transparent" },
   },
 };

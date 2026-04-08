@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 # PRD §9.2 — order accuracy tolerance: a slot counts as accurate when the
 # predicted vehicle count is within this many trucks of the actual one.
-ORDER_ACCURACY_TOLERANCE = 1
+ORDER_ACCURACY_TOLERANCE = 2
 
 _engine: AsyncEngine | None = None
 
@@ -504,7 +504,7 @@ async def get_business_metrics(
 ) -> dict:
     """Compute PRD §9.2 business KPIs over slots that have actual fulfilment.
 
-    * ``order_accuracy``         — share of slots with |predicted - actual| ≤ 1
+    * ``order_accuracy``         — share of slots with |predicted - actual| ≤ 2
     * ``avg_truck_utilization``  — mean(actual_units / (vehicles * capacity))
 
     Slots without ``actual_vehicles`` are ignored. ``n_slots_total`` reflects

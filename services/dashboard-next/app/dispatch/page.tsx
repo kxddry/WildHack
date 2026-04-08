@@ -124,7 +124,7 @@ export default function DispatchPage() {
       const forecasts: Array<{ anchor_ts: string }> = fcData.forecasts ?? [];
 
       if (forecasts.length === 0) {
-        throw new Error("No forecasts found for this warehouse");
+        throw new Error("Для этого склада не найдено прогнозов");
       }
 
       const anchors = forecasts.map((f) => new Date(f.anchor_ts).getTime());
@@ -143,10 +143,10 @@ export default function DispatchPage() {
         }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.detail ?? data.error ?? "Dispatch failed");
+      if (!res.ok) throw new Error(data.detail ?? data.error ?? "Ошибка диспетчеризации");
       fetchRequests(selectedWarehouse);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Dispatch failed");
+      setError(e instanceof Error ? e.message : "Ошибка диспетчеризации");
     } finally {
       setDispatching(false);
     }
@@ -162,9 +162,9 @@ export default function DispatchPage() {
     <div className="space-y-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold">Dispatch</h1>
+          <h1 className="text-2xl font-bold">Диспетчеризация</h1>
           <p className="text-muted-foreground text-sm mt-1">
-            Run dispatch and manage transport requests
+            Запуск диспетчеризации и управление заявками на транспорт
           </p>
         </div>
 
@@ -178,7 +178,7 @@ export default function DispatchPage() {
                 onValueChange={setSelectedWarehouse}
               >
                 <SelectTrigger>
-                  <SelectValue placeholder="Select warehouse" />
+                  <SelectValue placeholder="Выберите склад" />
                 </SelectTrigger>
                 <SelectContent>
                   {warehouses.map((w) => (
@@ -186,7 +186,7 @@ export default function DispatchPage() {
                       key={w.warehouse_id}
                       value={String(w.warehouse_id)}
                     >
-                      {w.name ?? `Warehouse ${w.warehouse_id}`}
+                      {w.name ?? `Склад ${w.warehouse_id}`}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -196,7 +196,7 @@ export default function DispatchPage() {
 
           <div className="flex flex-col gap-1 w-48">
             <span className="text-xs text-muted-foreground">
-              Forecast window: {forecastWindow}h
+              Окно прогноза: {forecastWindow}ч
             </span>
             <Slider
               min={1}
@@ -218,29 +218,29 @@ export default function DispatchPage() {
             ) : (
               <Truck className="h-4 w-4 mr-2" />
             )}
-            {dispatching ? "Running..." : "Run Dispatch"}
+            {dispatching ? "Выполняется..." : "Запустить диспетчеризацию"}
           </Button>
         </div>
       </div>
 
-      {error && <p className="text-red-500 text-sm">Error: {error}</p>}
+      {error && <p className="text-red-500 text-sm">Ошибка: {error}</p>}
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-        <KpiCard title="Total Trucks" value={totalTrucks} icon={Truck} />
+        <KpiCard title="Всего грузовиков" value={totalTrucks} icon={Truck} />
         <KpiCard
-          title="Planned"
+          title="Запланировано"
           value={planned}
-          subtitle="requests"
+          subtitle="заявок"
           icon={CheckCircle}
         />
         <KpiCard
-          title="Dispatched"
+          title="Отправлено"
           value={dispatched}
-          subtitle="requests"
+          subtitle="заявок"
           icon={XCircle}
         />
         <KpiCard
-          title="Total Containers"
+          title="Всего контейнеров"
           value={totalContainers.toFixed(1)}
           icon={Package}
         />
@@ -248,16 +248,16 @@ export default function DispatchPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Trucks by Time Slot</CardTitle>
+          <CardTitle>Грузовики по временным слотам</CardTitle>
         </CardHeader>
         <CardContent>
           {loadingRequests ? (
             <div className="h-64 flex items-center justify-center text-muted-foreground">
-              Loading...
+              Загрузка...
             </div>
           ) : chartData.length === 0 ? (
             <div className="h-64 flex items-center justify-center text-muted-foreground">
-              No dispatch data — run dispatch first
+              Нет данных — сначала запустите диспетчеризацию
             </div>
           ) : (
             <ResponsiveContainer width="100%" height={280}>
@@ -301,18 +301,18 @@ export default function DispatchPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Transport Requests</CardTitle>
+          <CardTitle>Заявки на транспорт</CardTitle>
         </CardHeader>
         <CardContent className="p-0">
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Start</TableHead>
-                <TableHead>End</TableHead>
-                <TableHead className="text-right">Containers</TableHead>
-                <TableHead className="text-right">Trucks</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Calculation</TableHead>
+                <TableHead>Начало</TableHead>
+                <TableHead>Конец</TableHead>
+                <TableHead className="text-right">Контейнеры</TableHead>
+                <TableHead className="text-right">Грузовики</TableHead>
+                <TableHead>Статус</TableHead>
+                <TableHead>Расчёт</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>

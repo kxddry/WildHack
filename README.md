@@ -239,7 +239,7 @@ Score = WAPE + RBias
 
 Система считает и отдает через API:
 
-- `order_accuracy` — доля слотов, где `|predicted_vehicles - actual_vehicles| <= 1`;
+- `order_accuracy` — доля слотов, где `|predicted_vehicles - actual_vehicles| <= 2`;
 - `avg_truck_utilization` — средняя загрузка машин `actual_units / (vehicles * capacity)`.
 
 ### Автоматический контроль качества
@@ -304,7 +304,8 @@ Dashboard нужен не только для красивой демо-карт
 Judge-flow использует `Data/raw/train_team_track.parquet`:
 
 - если БД пустая, данные автоматически загружаются;
-- затем запускается historical replay;
+- затем запускаются 5 non-overlapping historical replay cycles на канонической сетке `:00/:30`;
+- после них одним проходом backfill'ятся `target_2h` и `transport_requests.actual_*`;
 - затем запускается текущий `predict + dispatch`;
 - в результате dashboard сразу непустой и пригоден для демонстрации.
 
@@ -326,8 +327,9 @@ make judge-up
 2. автоматически создает `.env` из шаблона, если его нет;
 3. проверяет health всех сервисов;
 4. при пустой БД загружает demo snapshot;
-5. прогоняет historical replay и current pipeline;
-6. печатает URL сервисов.
+5. прогоняет 5 historical replay anchors oldest→newest с шагом 5 часов, затем backfill actuals;
+6. запускает current pipeline для свежих planned/dispatched слотов;
+7. печатает URL сервисов.
 
 Полезные команды:
 

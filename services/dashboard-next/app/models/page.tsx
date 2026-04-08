@@ -1,10 +1,30 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { AlertCircle, Loader2, RefreshCw, ShieldCheck, Trophy } from "lucide-react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Loader2,
+  RefreshCw,
+  ShieldCheck,
+  Trophy,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import {
   Table,
   TableBody,
@@ -13,6 +33,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { StatusBadge } from "@/lib/status-badge";
 import type { ModelRegistrySummary } from "@/lib/types";
 
 interface ApiError {
@@ -26,7 +47,7 @@ function formatError(err: ApiError): string {
   if (Array.isArray(err.detail)) {
     return err.detail.map((item) => item.msg ?? JSON.stringify(item)).join("; ");
   }
-  return "Request failed";
+  return "Ошибка запроса";
 }
 
 async function readError(res: Response): Promise<string> {
@@ -35,24 +56,6 @@ async function readError(res: Response): Promise<string> {
     return formatError((await res.json()) as ApiError);
   }
   return (await res.text()) || `HTTP ${res.status}`;
-}
-
-function statusBadge(status: string | undefined) {
-  const value = (status ?? "unknown").toLowerCase();
-  const tone =
-    value.includes("success") || value.includes("promoted")
-      ? "bg-emerald-600 text-white"
-      : value.includes("fail")
-        ? "bg-rose-700 text-white"
-        : value.includes("skip")
-          ? "bg-amber-600 text-white"
-          : "bg-muted text-foreground";
-
-  return (
-    <span className={`rounded px-2 py-1 text-xs font-medium ${tone}`}>
-      {status ?? "unknown"}
-    </span>
-  );
 }
 
 export default function ModelsPage() {
@@ -72,7 +75,7 @@ export default function ModelsPage() {
       setSummary((await res.json()) as ModelRegistrySummary);
       setError(null);
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Models unavailable");
+      setError(loadError instanceof Error ? loadError.message : "Модели недоступны");
     } finally {
       setLoading(false);
     }
@@ -96,7 +99,7 @@ export default function ModelsPage() {
         await loadSummary();
       } catch (action) {
         setActionError(
-          action instanceof Error ? action.message : "Action failed unexpectedly"
+          action instanceof Error ? action.message : "Действие не выполнено"
         );
       } finally {
         setBusyKey(null);
@@ -111,90 +114,122 @@ export default function ModelsPage() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold">Models</h1>
+          <h1 className="text-2xl font-bold">Модели</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Registry, champion state, and operator controls for retrain, shadow,
-            and primary promotion.
+            Реестр, состояние чемпиона и управление переобучением, теневыми
+            запусками и продвижением в основную модель.
           </p>
         </div>
-        <Button
-          onClick={() =>
-            void runAction("retrain", "/api/models/retrain", "Retrain triggered")
-          }
-          disabled={busyKey === "retrain"}
-        >
-          {busyKey === "retrain" ? (
-            <>
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              Retraining...
-            </>
-          ) : (
-            <>
-              <RefreshCw className="mr-2 h-4 w-4" />
-              Retrain
-            </>
-          )}
-        </Button>
+        <AlertDialog>
+          <AlertDialogTrigger asChild>
+            <Button disabled={busyKey === "retrain"}>
+              {busyKey === "retrain" ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Переобучение...
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  Переобучить
+                </>
+              )}
+            </Button>
+          </AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Запустить переобучение?</AlertDialogTitle>
+              <AlertDialogDescription>
+                Это запустит новый цикл обучения на последнем снимке.
+                Новая модель станет кандидатом реестра и будет бороться за
+                место чемпиона. Используйте только если нужно переобучить
+                модель вне расписания.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Отмена</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={() =>
+                  void runAction(
+                    "retrain",
+                    "/api/models/retrain",
+                    "Переобучение запущено"
+                  )
+                }
+              >
+                Переобучить
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
 
       {error ? (
-        <Card className="border-destructive/50">
-          <CardContent className="pt-6 text-sm text-destructive">{error}</CardContent>
-        </Card>
+        <Alert variant="destructive">
+          <AlertTriangle />
+          <AlertTitle>Модели недоступны</AlertTitle>
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
       ) : null}
 
       {actionError ? (
-        <Card className="border-destructive/50">
-          <CardContent className="pt-6 text-sm text-destructive">
-            {actionError}
-          </CardContent>
-        </Card>
+        <Alert variant="destructive">
+          <AlertTriangle />
+          <AlertTitle>Ошибка действия</AlertTitle>
+          <AlertDescription>{actionError}</AlertDescription>
+        </Alert>
       ) : null}
 
       {actionMessage ? (
-        <Card className="border-emerald-500/40">
-          <CardContent className="pt-6 text-sm text-emerald-400">
-            {actionMessage}
-          </CardContent>
-        </Card>
+        <Alert>
+          <CheckCircle2 className="text-success" />
+          <AlertTitle>Действие принято</AlertTitle>
+          <AlertDescription>{actionMessage}</AlertDescription>
+        </Alert>
       ) : null}
 
       <div className="grid gap-4 md:grid-cols-3">
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Champion</CardTitle>
+            <CardTitle className="text-base">Чемпион</CardTitle>
           </CardHeader>
           <CardContent className="space-y-1 text-sm">
             <div className="flex items-center gap-2">
               <Trophy className="h-4 w-4 text-amber-400" />
               <span className="font-mono">
-                {summary?.champion_version ?? "No champion yet"}
+                {summary?.champion_version ?? "Чемпион не определён"}
               </span>
             </div>
             <p className="text-muted-foreground">
-              Lowest CV score in the registry.
+              Лучший CV-скор в реестре.
             </p>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Last retrain</CardTitle>
+            <CardTitle className="text-base">Последнее переобучение</CardTitle>
           </CardHeader>
           <CardContent className="space-y-1 text-sm">
-            <div>{statusBadge(String(lastRetrain.status ?? "not-run"))}</div>
+            <div>
+              <StatusBadge status={String(lastRetrain.status ?? "not-run")} />
+            </div>
             <p className="font-mono">
               {String(lastRetrain.version ?? lastRetrain.new_model_version ?? "—")}
             </p>
             <p className="text-muted-foreground">
-              {String(lastRetrain.promotion_status ?? lastRetrain.finished_at ?? "No retrain recorded")}
+              {String(
+                lastRetrain.promotion_status ??
+                  lastRetrain.finished_at ??
+                  "Переобучений не зафиксировано"
+              )}
             </p>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Evaluation surface</CardTitle>
+            <CardTitle className="text-base">Доступно для оценки</CardTitle>
           </CardHeader>
           <CardContent className="space-y-1 text-sm">
             <div className="flex items-center gap-2">
@@ -202,13 +237,13 @@ export default function ModelsPage() {
               <span>
                 {summary?.models.filter((model) => model.evaluation_available).length ??
                   0}{" "}
-                version(s) ready for Team Track
+                версий готово для Team Track
               </span>
             </div>
             <p className="text-muted-foreground">
-              Old registry versions stay promotable but remain unavailable for
-              isolated test runs until retrained with versioned inference
-              artifacts.
+              Старые версии реестра остаются доступны для продвижения, но
+              недоступны для изолированных тестов до переобучения с
+              версионированными артефактами инференса.
             </p>
           </CardContent>
         </Card>
@@ -216,118 +251,196 @@ export default function ModelsPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Registry</CardTitle>
+          <CardTitle>Реестр</CardTitle>
         </CardHeader>
         <CardContent className="p-0">
-          {loading ? (
-            <div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
-              Loading model registry...
-            </div>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Version</TableHead>
-                  <TableHead>Score</TableHead>
-                  <TableHead>Training date</TableHead>
-                  <TableHead>Retrain config</TableHead>
-                  <TableHead>Evaluation</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {summary?.models.map((model) => {
-                  const config = model.config_json ?? {};
-                  const trainingWindow = config["training_window_days"];
-                  const policy = config["policy"];
-                  return (
-                    <TableRow key={model.model_version}>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Версия</TableHead>
+                <TableHead>Скор</TableHead>
+                <TableHead>Дата обучения</TableHead>
+                <TableHead>Конфигурация переобучения</TableHead>
+                <TableHead>Оценка</TableHead>
+                <TableHead className="text-right">Действия</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loading
+                ? Array.from({ length: 4 }).map((_, idx) => (
+                    <TableRow key={`skeleton-${idx}`}>
                       <TableCell>
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono">{model.model_version}</span>
-                          {model.is_champion ? <Badge>Champion</Badge> : null}
-                        </div>
-                      </TableCell>
-                      <TableCell className="font-mono">
-                        {model.cv_score != null ? model.cv_score.toFixed(4) : "—"}
-                      </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
-                        {model.training_date
-                          ? new Date(model.training_date).toLocaleString()
-                          : "—"}
-                      </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
-                        {trainingWindow != null ? `${String(trainingWindow)}d` : "—"}
-                        {policy ? ` · ${String(policy)}` : ""}
+                        <Skeleton className="h-5 w-32" />
                       </TableCell>
                       <TableCell>
-                        {model.evaluation_available ? (
-                          <Badge className="bg-emerald-600 text-white hover:bg-emerald-600">
-                            available
-                          </Badge>
-                        ) : (
-                          <Badge className="bg-amber-600 text-white hover:bg-amber-600">
-                            unavailable
-                          </Badge>
-                        )}
+                        <Skeleton className="h-4 w-16" />
+                      </TableCell>
+                      <TableCell>
+                        <Skeleton className="h-4 w-32" />
+                      </TableCell>
+                      <TableCell>
+                        <Skeleton className="h-4 w-24" />
+                      </TableCell>
+                      <TableCell>
+                        <Skeleton className="h-5 w-20" />
                       </TableCell>
                       <TableCell>
                         <div className="flex justify-end gap-2">
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            disabled={busyKey === `shadow:${model.model_version}`}
-                            onClick={() =>
-                              void runAction(
-                                `shadow:${model.model_version}`,
-                                `/api/models/${encodeURIComponent(model.model_version)}/shadow`,
-                                `Shadow loaded: ${model.model_version}`
-                              )
-                            }
-                          >
-                            {busyKey === `shadow:${model.model_version}` ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                            ) : (
-                              "Load shadow"
-                            )}
-                          </Button>
-                          <Button
-                            size="sm"
-                            disabled={busyKey === `promote:${model.model_version}`}
-                            onClick={() =>
-                              void runAction(
-                                `promote:${model.model_version}`,
-                                `/api/models/${encodeURIComponent(model.model_version)}/promote`,
-                                `Promoted primary: ${model.model_version}`
-                              )
-                            }
-                          >
-                            {busyKey === `promote:${model.model_version}` ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                            ) : (
-                              "Promote primary"
-                            )}
-                          </Button>
+                          <Skeleton className="h-8 w-24" />
+                          <Skeleton className="h-8 w-32" />
                         </div>
                       </TableCell>
                     </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          )}
+                  ))
+                : summary?.models.map((model) => {
+                    const config = model.config_json ?? {};
+                    const trainingWindow = config["training_window_days"];
+                    const policy = config["policy"];
+                    return (
+                      <TableRow key={model.model_version}>
+                        <TableCell>
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono">{model.model_version}</span>
+                            {model.is_champion ? <Badge>Чемпион</Badge> : null}
+                          </div>
+                        </TableCell>
+                        <TableCell className="font-mono">
+                          {model.cv_score != null ? model.cv_score.toFixed(4) : "—"}
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground">
+                          {model.training_date
+                            ? new Date(model.training_date).toLocaleString()
+                            : "—"}
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground">
+                          {trainingWindow != null ? `${String(trainingWindow)} дн.` : "—"}
+                          {policy ? ` · ${String(policy)}` : ""}
+                        </TableCell>
+                        <TableCell>
+                          {model.evaluation_available ? (
+                            <Badge variant="success">доступна</Badge>
+                          ) : (
+                            <Badge variant="warning">недоступна</Badge>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex justify-end gap-2">
+                            <AlertDialog>
+                              <AlertDialogTrigger asChild>
+                                <Button
+                                  variant="secondary"
+                                  size="sm"
+                                  disabled={
+                                    busyKey === `shadow:${model.model_version}`
+                                  }
+                                >
+                                  {busyKey === `shadow:${model.model_version}` ? (
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                  ) : (
+                                    "Загрузить как теневую"
+                                  )}
+                                </Button>
+                              </AlertDialogTrigger>
+                              <AlertDialogContent>
+                                <AlertDialogHeader>
+                                  <AlertDialogTitle>
+                                    Загрузить{" "}
+                                    <span className="font-mono">
+                                      {model.model_version}
+                                    </span>{" "}
+                                    как теневую?
+                                  </AlertDialogTitle>
+                                  <AlertDialogDescription>
+                                    Теневая модель получает параллельную копию
+                                    продакшн-трафика для офлайн-скоринга. Она
+                                    не влияет на ответы клиентам, но сбрасывает
+                                    счётчик серии теневой модели.
+                                  </AlertDialogDescription>
+                                </AlertDialogHeader>
+                                <AlertDialogFooter>
+                                  <AlertDialogCancel>Отмена</AlertDialogCancel>
+                                  <AlertDialogAction
+                                    onClick={() =>
+                                      void runAction(
+                                        `shadow:${model.model_version}`,
+                                        `/api/models/${encodeURIComponent(model.model_version)}/shadow`,
+                                        `Теневая модель загружена: ${model.model_version}`
+                                      )
+                                    }
+                                  >
+                                    Загрузить как теневую
+                                  </AlertDialogAction>
+                                </AlertDialogFooter>
+                              </AlertDialogContent>
+                            </AlertDialog>
+                            <AlertDialog>
+                              <AlertDialogTrigger asChild>
+                                <Button
+                                  size="sm"
+                                  disabled={
+                                    busyKey === `promote:${model.model_version}`
+                                  }
+                                >
+                                  {busyKey === `promote:${model.model_version}` ? (
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                  ) : (
+                                    "Сделать основной"
+                                  )}
+                                </Button>
+                              </AlertDialogTrigger>
+                              <AlertDialogContent>
+                                <AlertDialogHeader>
+                                  <AlertDialogTitle>
+                                    Сделать{" "}
+                                    <span className="font-mono">
+                                      {model.model_version}
+                                    </span>{" "}
+                                    основной моделью?
+                                  </AlertDialogTitle>
+                                  <AlertDialogDescription>
+                                    Это немедленно переключит продакшн-трафик
+                                    на выбранную версию модели. Все прогнозы
+                                    будут обслуживаться ей до замены. Убедитесь,
+                                    что офлайн-оценка подтвердила безопасность
+                                    продвижения.
+                                  </AlertDialogDescription>
+                                </AlertDialogHeader>
+                                <AlertDialogFooter>
+                                  <AlertDialogCancel>Отмена</AlertDialogCancel>
+                                  <AlertDialogAction
+                                    variant="destructive"
+                                    onClick={() =>
+                                      void runAction(
+                                        `promote:${model.model_version}`,
+                                        `/api/models/${encodeURIComponent(model.model_version)}/promote`,
+                                        `Основная модель: ${model.model_version}`
+                                      )
+                                    }
+                                  >
+                                    Сделать основной
+                                  </AlertDialogAction>
+                                </AlertDialogFooter>
+                              </AlertDialogContent>
+                            </AlertDialog>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+            </TableBody>
+          </Table>
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Notes</CardTitle>
+          <CardTitle className="text-base">Примечания</CardTitle>
         </CardHeader>
         <CardContent className="text-sm text-muted-foreground">
-          Registry versions without versioned <code>static_aggs</code> and{" "}
-          <code>fill_values</code> remain eligible for shadow or primary loads,
-          but the dashboard marks them unavailable for Team Track evaluation on
-          purpose.
+          Версии реестра без версионированных <code>static_aggs</code> и{" "}
+          <code>fill_values</code> остаются доступны для теневой или основной
+          загрузки, но панель сознательно помечает их как недоступные
+          для оценки Team Track.
         </CardContent>
       </Card>
     </div>

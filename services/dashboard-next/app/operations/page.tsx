@@ -1,9 +1,29 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { AlertTriangle, Loader2, RefreshCw, ShieldAlert, Workflow } from "lucide-react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Loader2,
+  RefreshCw,
+  ShieldAlert,
+  Workflow,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import {
   Table,
   TableBody,
@@ -12,6 +32,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { StatusBadge } from "@/lib/status-badge";
 import type {
   PipelineRun,
   PipelineStatus,
@@ -30,7 +51,7 @@ function formatError(err: ApiError): string {
   if (Array.isArray(err.detail)) {
     return err.detail.map((item) => item.msg ?? JSON.stringify(item)).join("; ");
   }
-  return "Request failed";
+  return "Ошибка запроса";
 }
 
 async function readError(res: Response): Promise<string> {
@@ -39,24 +60,6 @@ async function readError(res: Response): Promise<string> {
     return formatError((await res.json()) as ApiError);
   }
   return (await res.text()) || `HTTP ${res.status}`;
-}
-
-function badge(status: string) {
-  const value = status.toLowerCase();
-  const tone =
-    value.includes("success") || value === "ok"
-      ? "bg-emerald-600 text-white"
-      : value.includes("fail")
-        ? "bg-rose-700 text-white"
-        : value.includes("run") || value.includes("active")
-          ? "bg-sky-700 text-white"
-          : "bg-muted text-foreground";
-
-  return (
-    <span className={`rounded px-2 py-1 text-xs font-medium ${tone}`}>
-      {status}
-    </span>
-  );
 }
 
 export default function OperationsPage() {
@@ -100,7 +103,7 @@ export default function OperationsPage() {
       setError(null);
     } catch (loadError) {
       setError(
-        loadError instanceof Error ? loadError.message : "Operations unavailable"
+        loadError instanceof Error ? loadError.message : "Раздел операций недоступен"
       );
     } finally {
       setLoading(false);
@@ -125,7 +128,7 @@ export default function OperationsPage() {
         await loadData();
       } catch (action) {
         setActionError(
-          action instanceof Error ? action.message : "Action failed unexpectedly"
+          action instanceof Error ? action.message : "Действие не выполнено"
         );
       } finally {
         setBusyKey(null);
@@ -138,96 +141,143 @@ export default function OperationsPage() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold">Operations</h1>
+          <h1 className="text-2xl font-bold">Операции</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Pipeline status, recent execution history, quality alerts, and
-            manual operator triggers.
+            Статус пайплайна, история последних запусков, оповещения о
+            качестве и ручные действия оператора.
           </p>
         </div>
         <div className="flex gap-2">
-          <Button
-            variant="secondary"
-            onClick={() =>
-              void runAction(
-                "pipeline",
-                "/api/operations/pipeline/trigger",
-                "Pipeline trigger started"
-              )
-            }
-            disabled={busyKey === "pipeline"}
-          >
-            {busyKey === "pipeline" ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <>
-                <Workflow className="mr-2 h-4 w-4" />
-                Trigger pipeline
-              </>
-            )}
-          </Button>
-          <Button
-            onClick={() =>
-              void runAction(
-                "quality",
-                "/api/operations/quality/trigger",
-                "Quality trigger started"
-              )
-            }
-            disabled={busyKey === "quality"}
-          >
-            {busyKey === "quality" ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <>
-                <RefreshCw className="mr-2 h-4 w-4" />
-                Trigger quality
-              </>
-            )}
-          </Button>
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button variant="secondary" disabled={busyKey === "pipeline"}>
+                {busyKey === "pipeline" ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <>
+                    <Workflow className="mr-2 h-4 w-4" />
+                    Запустить пайплайн
+                  </>
+                )}
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Запустить пайплайн?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  Это запустит ручное выполнение пайплайна. Он загрузит свежие
+                  данные, пересчитает признаки и может создать нового
+                  кандидата для переобучения. Запускайте только если плановый
+                  цикл недоступен или завис.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Отмена</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={() =>
+                    void runAction(
+                      "pipeline",
+                      "/api/operations/pipeline/trigger",
+                      "Запуск пайплайна инициирован"
+                    )
+                  }
+                >
+                  Запустить
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button disabled={busyKey === "quality"}>
+                {busyKey === "quality" ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <>
+                    <RefreshCw className="mr-2 h-4 w-4" />
+                    Проверить качество
+                  </>
+                )}
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Запустить проверку качества?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  Это запустит офлайн-оценку качества против текущей теневой
+                  модели. Результаты могут изменить счётчик серии теневой
+                  модели и повлиять на решения о продвижении.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Отмена</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={() =>
+                    void runAction(
+                      "quality",
+                      "/api/operations/quality/trigger",
+                      "Проверка качества инициирована"
+                    )
+                  }
+                >
+                  Запустить
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
       </div>
 
       {error ? (
-        <Card className="border-destructive/50">
-          <CardContent className="pt-6 text-sm text-destructive">{error}</CardContent>
-        </Card>
+        <Alert variant="destructive">
+          <AlertTriangle />
+          <AlertTitle>Раздел операций недоступен</AlertTitle>
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
       ) : null}
 
       {actionError ? (
-        <Card className="border-destructive/50">
-          <CardContent className="pt-6 text-sm text-destructive">
-            {actionError}
-          </CardContent>
-        </Card>
+        <Alert variant="destructive">
+          <AlertTriangle />
+          <AlertTitle>Ошибка действия</AlertTitle>
+          <AlertDescription>{actionError}</AlertDescription>
+        </Alert>
       ) : null}
 
       {actionMessage ? (
-        <Card className="border-emerald-500/40">
-          <CardContent className="pt-6 text-sm text-emerald-400">
-            {actionMessage}
-          </CardContent>
-        </Card>
+        <Alert>
+          <CheckCircle2 className="text-success" />
+          <AlertTitle>Действие принято</AlertTitle>
+          <AlertDescription>{actionMessage}</AlertDescription>
+        </Alert>
       ) : null}
 
       <div className="grid gap-4 md:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Pipeline status</CardTitle>
+            <CardTitle className="text-base">Статус пайплайна</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2 text-sm">
             {loading ? (
-              <p className="text-muted-foreground">Loading...</p>
+              <div className="space-y-2">
+                <Skeleton className="h-5 w-24" />
+                <Skeleton className="h-4 w-48" />
+                <Skeleton className="h-4 w-32" />
+              </div>
             ) : (
               <>
-                <div>{badge(pipeline?.last_status ?? "unknown")}</div>
+                <div>
+                  <StatusBadge status={pipeline?.last_status ?? "unknown"} />
+                </div>
                 <p className="text-muted-foreground">
-                  Last run:{" "}
+                  Последний запуск:{" "}
                   {pipeline?.last_run
                     ? new Date(pipeline.last_run).toLocaleString()
-                    : "never"}
+                    : "никогда"}
                 </p>
                 <p className="font-mono">
-                  Run count: {pipeline?.run_count ?? 0}
+                  Кол-во запусков: {pipeline?.run_count ?? 0}
                 </p>
               </>
             )}
@@ -236,25 +286,34 @@ export default function OperationsPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Quality status</CardTitle>
+            <CardTitle className="text-base">Статус качества</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2 text-sm">
             {loading ? (
-              <p className="text-muted-foreground">Loading...</p>
+              <div className="space-y-2">
+                <Skeleton className="h-5 w-24" />
+                <Skeleton className="h-4 w-48" />
+                <Skeleton className="h-4 w-40" />
+                <Skeleton className="h-4 w-36" />
+              </div>
             ) : (
               <>
-                <div>{badge(quality?.last_check ? "checked" : "not-run")}</div>
+                <div>
+                  <StatusBadge
+                    status={quality?.last_check ? "checked" : "not-run"}
+                  />
+                </div>
                 <p className="text-muted-foreground">
-                  Last check:{" "}
+                  Последняя проверка:{" "}
                   {quality?.last_check
                     ? new Date(quality.last_check).toLocaleString()
-                    : "never"}
+                    : "никогда"}
                 </p>
                 <p className="font-mono">
-                  Active alerts: {quality?.active_alerts ?? 0}
+                  Активных оповещений: {quality?.active_alerts ?? 0}
                 </p>
                 <p className="font-mono">
-                  Shadow streak: {quality?.shadow_win_streak ?? 0}/
+                  Серия теневой модели: {quality?.shadow_win_streak ?? 0}/
                   {quality?.promote_threshold ?? 0}
                 </p>
               </>
@@ -265,40 +324,59 @@ export default function OperationsPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Recent pipeline history</CardTitle>
+          <CardTitle>Недавние запуски пайплайна</CardTitle>
         </CardHeader>
         <CardContent className="p-0">
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Run</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Started</TableHead>
-                <TableHead>Completed</TableHead>
+                <TableHead>Запуск</TableHead>
+                <TableHead>Статус</TableHead>
+                <TableHead>Начало</TableHead>
+                <TableHead>Завершение</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {history.map((run) => (
-                <TableRow key={run.id}>
-                  <TableCell className="font-mono">{run.run_type}</TableCell>
-                  <TableCell>{badge(run.status)}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {new Date(run.started_at).toLocaleString()}
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {run.completed_at
-                      ? new Date(run.completed_at).toLocaleString()
-                      : "—"}
-                  </TableCell>
-                </TableRow>
-              ))}
+              {loading
+                ? Array.from({ length: 4 }).map((_, idx) => (
+                    <TableRow key={`skeleton-${idx}`}>
+                      <TableCell>
+                        <Skeleton className="h-4 w-20" />
+                      </TableCell>
+                      <TableCell>
+                        <Skeleton className="h-5 w-16" />
+                      </TableCell>
+                      <TableCell>
+                        <Skeleton className="h-4 w-32" />
+                      </TableCell>
+                      <TableCell>
+                        <Skeleton className="h-4 w-32" />
+                      </TableCell>
+                    </TableRow>
+                  ))
+                : history.map((run) => (
+                    <TableRow key={run.id}>
+                      <TableCell className="font-mono">{run.run_type}</TableCell>
+                      <TableCell>
+                        <StatusBadge status={run.status} />
+                      </TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        {new Date(run.started_at).toLocaleString()}
+                      </TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        {run.completed_at
+                          ? new Date(run.completed_at).toLocaleString()
+                          : "—"}
+                      </TableCell>
+                    </TableRow>
+                  ))}
               {!loading && history.length === 0 ? (
                 <TableRow>
                   <TableCell
                     colSpan={4}
                     className="text-center text-sm text-muted-foreground"
                   >
-                    No pipeline runs recorded yet.
+                    Запусков пайплайна пока нет.
                   </TableCell>
                 </TableRow>
               ) : null}
@@ -309,7 +387,7 @@ export default function OperationsPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Quality alerts</CardTitle>
+          <CardTitle>Оповещения о качестве</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           {quality?.last_metrics ? (
@@ -327,13 +405,13 @@ export default function OperationsPage() {
                 </p>
               </div>
               <div>
-                <p className="text-muted-foreground">Combined</p>
+                <p className="text-muted-foreground">Суммарный</p>
                 <p className="font-mono">
                   {String(quality.last_metrics["combined_score"] ?? "—")}
                 </p>
               </div>
               <div>
-                <p className="text-muted-foreground">Pairs</p>
+                <p className="text-muted-foreground">Пар</p>
                 <p className="font-mono">
                   {String(quality.last_metrics["n_pairs"] ?? "—")}
                 </p>
@@ -344,39 +422,39 @@ export default function OperationsPage() {
           <div className="space-y-3">
             {alerts.length === 0 ? (
               <div className="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">
-                No active quality alerts.
+                Активных оповещений о качестве нет.
               </div>
             ) : (
               alerts.map((alert) => (
-                <div
-                  key={`${alert.type}-${alert.timestamp}`}
-                  className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4"
-                >
-                  <div className="flex items-start gap-3">
-                    <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-400" />
-                    <div className="space-y-1 text-sm">
-                      <div className="font-medium">{alert.message}</div>
-                      <div className="font-mono text-muted-foreground">
-                        {alert.type} · value {alert.value} · threshold {alert.threshold}
-                      </div>
-                      <div className="text-xs text-muted-foreground">
-                        {new Date(alert.timestamp).toLocaleString()}
-                      </div>
-                    </div>
-                  </div>
-                </div>
+                <Alert key={`${alert.type}-${alert.timestamp}`}>
+                  <AlertTriangle className="text-warning" />
+                  <AlertTitle>{alert.message}</AlertTitle>
+                  <AlertDescription>
+                    <span className="font-mono">
+                      {alert.type} · значение {alert.value} · порог{" "}
+                      {alert.threshold}
+                    </span>
+                    <span className="text-xs">
+                      {new Date(alert.timestamp).toLocaleString()}
+                    </span>
+                  </AlertDescription>
+                </Alert>
               ))
             )}
           </div>
 
           {quality?.shadow_streak_version ? (
-            <div className="flex items-start gap-3 rounded-lg border border-sky-500/30 bg-sky-500/5 p-4 text-sm">
-              <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-sky-400" />
-              <div>
-                Shadow streak is currently tracked for{" "}
-                <span className="font-mono">{quality.shadow_streak_version}</span>.
-              </div>
-            </div>
+            <Alert>
+              <ShieldAlert className="text-info" />
+              <AlertTitle>Серия теневой модели активна</AlertTitle>
+              <AlertDescription>
+                Серия теневой модели сейчас отслеживается для{" "}
+                <span className="font-mono">
+                  {quality.shadow_streak_version}
+                </span>
+                .
+              </AlertDescription>
+            </Alert>
           ) : null}
         </CardContent>
       </Card>

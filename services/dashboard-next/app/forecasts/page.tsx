@@ -160,9 +160,9 @@ export default function ForecastsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold">Forecasts</h1>
+          <h1 className="text-2xl font-bold">Прогнозы</h1>
           <p className="text-muted-foreground text-sm mt-1">
-            ML demand forecasts by warehouse and route
+            ML-прогнозы спроса по складам и маршрутам
           </p>
         </div>
         <div className="w-52">
@@ -174,7 +174,7 @@ export default function ForecastsPage() {
               onValueChange={setSelectedWarehouse}
             >
               <SelectTrigger>
-                <SelectValue placeholder="Select warehouse" />
+                <SelectValue placeholder="Выберите склад" />
               </SelectTrigger>
               <SelectContent>
                 {warehouses.map((w) => (
@@ -182,7 +182,7 @@ export default function ForecastsPage() {
                     key={w.warehouse_id}
                     value={String(w.warehouse_id)}
                   >
-                    {w.name ?? `Warehouse ${w.warehouse_id}`}
+                    {w.name ?? `Склад ${w.warehouse_id}`}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -191,39 +191,39 @@ export default function ForecastsPage() {
         </div>
       </div>
 
-      {error && <p className="text-red-500 text-sm">Error: {error}</p>}
+      {error && <p className="text-red-500 text-sm">Ошибка: {error}</p>}
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
         <KpiCard
-          title="Total Forecasts"
+          title="Всего прогнозов"
           value={forecasts.length}
           icon={TrendingUp}
         />
         <KpiCard
-          title="Unique Routes"
+          title="Уникальных маршрутов"
           value={uniqueRoutes}
           icon={GitBranch}
         />
         <KpiCard
-          title="Avg Predicted Containers"
+          title="Средний прогноз контейнеров"
           value={avgContainers}
           icon={Box}
         />
-        <KpiCard title="Model Version" value={modelVersion} icon={Tag} />
+        <KpiCard title="Версия модели" value={modelVersion} icon={Tag} />
       </div>
 
       <Card className="overflow-hidden">
         <CardHeader>
-          <CardTitle>Predicted Demand by Route</CardTitle>
+          <CardTitle>Прогнозируемый спрос по маршрутам</CardTitle>
         </CardHeader>
         <CardContent className="pr-2">
           {loadingForecasts ? (
             <div className="h-64 flex items-center justify-center text-muted-foreground">
-              Loading...
+              Загрузка...
             </div>
           ) : chartData.length === 0 ? (
             <div className="h-64 flex items-center justify-center text-muted-foreground">
-              No forecast data available
+              Данные прогнозов недоступны
             </div>
           ) : (
             <ResponsiveContainer width="100%" height={300}>
@@ -252,7 +252,7 @@ export default function ForecastsPage() {
                     key={routeId}
                     type="monotone"
                     dataKey={`route_${routeId}`}
-                    name={`Route ${routeId}`}
+                    name={`Маршрут ${routeId}`}
                     stroke={CHART_COLORS[idx % CHART_COLORS.length]}
                     dot={false}
                     strokeWidth={2}
@@ -266,17 +266,17 @@ export default function ForecastsPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Forecast Records</CardTitle>
+          <CardTitle>Записи прогнозов</CardTitle>
         </CardHeader>
         <CardContent className="p-0">
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Route ID</TableHead>
-                <TableHead>Anchor Time</TableHead>
-                <TableHead>Model Version</TableHead>
-                <TableHead>Steps</TableHead>
-                <TableHead>Created At</TableHead>
+                <TableHead>ID маршрута</TableHead>
+                <TableHead>Якорное время</TableHead>
+                <TableHead>Версия модели</TableHead>
+                <TableHead>Шагов</TableHead>
+                <TableHead>Создано</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>

@@ -21,7 +21,7 @@ async function fetchJson<T>(url: string): Promise<{ data: T | null; ok: boolean;
     if (!res.ok) return { data: null, ok: false, error: data.error ?? `HTTP ${res.status}` };
     return { data, ok: true };
   } catch (e) {
-    return { data: null, ok: false, error: e instanceof Error ? e.message : "Unreachable" };
+    return { data: null, ok: false, error: e instanceof Error ? e.message : "Недоступен" };
   }
 }
 
@@ -57,9 +57,9 @@ export default function ReadinessPage() {
 
       // 1. PostgreSQL
       results.push({
-        name: "PostgreSQL Connection",
+        name: "Подключение к PostgreSQL",
         status: wh.ok ? "pass" : "fail",
-        detail: wh.ok ? `Connected — ${warehouses.length} warehouse(s)` : wh.error!,
+        detail: wh.ok ? `Подключено — ${warehouses.length} склад(ов)` : wh.error!,
       });
 
       // Prediction/Dispatcher services report status as "healthy" (OK),
@@ -70,29 +70,29 @@ export default function ReadinessPage() {
 
       // 2. Prediction Service
       results.push({
-        name: "Prediction Service",
+        name: "Сервис прогнозирования",
         status: prediction.ok ? statusToCheck(prediction.data!.status) : "fail",
         detail: prediction.ok
-          ? `Status: ${prediction.data!.status}, uptime ${Math.round(prediction.data!.uptime_seconds ?? 0)}s`
+          ? `Статус: ${prediction.data!.status}, аптайм ${Math.round(prediction.data!.uptime_seconds ?? 0)} с`
           : prediction.error!,
       });
 
       // 3. Dispatcher Service
       results.push({
-        name: "Dispatcher Service",
+        name: "Сервис диспетчеризации",
         status: dispatcher.ok ? statusToCheck(dispatcher.data!.status) : "fail",
         detail: dispatcher.ok
-          ? `Status: ${dispatcher.data!.status}, uptime ${Math.round(dispatcher.data!.uptime_seconds ?? 0)}s`
+          ? `Статус: ${dispatcher.data!.status}, аптайм ${Math.round(dispatcher.data!.uptime_seconds ?? 0)} с`
           : dispatcher.error!,
       });
 
       // 4. ML Model
       results.push({
-        name: "ML Model",
+        name: "ML-модель",
         status: model.ok && model.data!.model_type ? "pass" : "warn",
         detail: model.ok
-          ? `${model.data!.model_type} v${model.data!.model_version}, horizon ${model.data!.forecast_horizon} steps`
-          : model.error ?? "Model not loaded",
+          ? `${model.data!.model_type} v${model.data!.model_version}, горизонт ${model.data!.forecast_horizon} шагов`
+          : model.error ?? "Модель не загружена",
       });
 
       // 5-9. Database tables — real COUNT(*) values via /api/readiness/stats
@@ -110,9 +110,9 @@ export default function ReadinessPage() {
         const count = stats.data ? stats.data[name] : 0;
         const available = stats.ok;
         results.push({
-          name: `Table: ${name}`,
+          name: `Таблица: ${name}`,
           status: available && count > 0 ? "pass" : available ? "warn" : "fail",
-          detail: available ? `${count} row(s) found` : (stats.error ?? "Database unavailable"),
+          detail: available ? `найдено ${count} строк` : (stats.error ?? "База данных недоступна"),
         });
       }
 
@@ -131,9 +131,9 @@ export default function ReadinessPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold">System Readiness</h1>
+        <h1 className="text-2xl font-bold">Готовность системы</h1>
         <p className="text-muted-foreground text-sm mt-1">
-          Health checks for all system components
+          Проверки состояния всех компонентов системы
         </p>
       </div>
 
@@ -143,16 +143,16 @@ export default function ReadinessPage() {
             <div className="flex items-start gap-4">
               <Upload className="h-6 w-6 text-primary shrink-0 mt-0.5" />
               <div className="flex-1 min-w-0">
-                <p className="font-semibold text-sm">No data yet</p>
+                <p className="font-semibold text-sm">Данных пока нет</p>
                 <p className="text-sm text-muted-foreground mt-1">
-                  The database is connected but empty. Upload your historical
-                  observations to bootstrap warehouses, routes, and forecasts.
+                  База данных подключена, но пуста. Загрузите исторические
+                  наблюдения, чтобы инициализировать склады, маршруты и прогнозы.
                 </p>
                 <Link
                   href="/setup"
                   className="inline-flex items-center gap-1.5 mt-3 text-sm font-medium text-primary hover:underline"
                 >
-                  Upload dataset →
+                  Загрузить датасет →
                 </Link>
               </div>
             </div>

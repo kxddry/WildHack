@@ -50,6 +50,9 @@ warehouse_rows="$(db_count warehouses)"
 route_rows="$(db_count routes)"
 forecast_rows="$(db_count forecasts)"
 request_rows="$(db_count transport_requests)"
+completed_rows=0
+planned_rows=0
+actual_rows=0
 did_seed_history=0
 
 if [ "${history_rows:-0}" -eq 0 ] || [ "${warehouse_rows:-0}" -eq 0 ] || [ "${route_rows:-0}" -eq 0 ]; then
@@ -63,9 +66,12 @@ if [ "${history_rows:-0}" -eq 0 ] || [ "${warehouse_rows:-0}" -eq 0 ] || [ "${ro
 fi
 
 if [ "$did_seed_history" -eq 1 ]; then
-  historical_ts="$(historical_reference_ts)"
-  [ -n "$historical_ts" ] || die "Failed to derive historical replay timestamp from route_status_history"
-  trigger_pipeline "$historical_ts" >/dev/null
+  mapfile -t historical_anchors < <(historical_replay_anchors)
+  [ "${#historical_anchors[@]}" -gt 0 ] || die "Failed to derive historical replay anchors from route_status_history"
+  log "Historical replay anchors (${#historical_anchors[@]}): ${historical_anchors[*]}"
+  for historical_ts in "${historical_anchors[@]}"; do
+    trigger_pipeline "$historical_ts" >/dev/null
+  done
   trigger_backfill >/dev/null
   trigger_pipeline >/dev/null
 elif [ "${forecast_rows:-0}" -eq 0 ] || [ "${request_rows:-0}" -eq 0 ]; then
@@ -76,7 +82,14 @@ ready=0
 for _ in $(seq 1 30); do
   forecast_rows="$(db_count forecasts)"
   request_rows="$(db_count transport_requests)"
+  completed_rows="$(request_status_count completed)"
+  planned_rows="$(request_status_count planned)"
+  actual_rows="$(actual_backfilled_count)"
   if [ "${forecast_rows:-0}" -gt 0 ] && [ "${request_rows:-0}" -gt 0 ]; then
+    if [ "$did_seed_history" -eq 1 ] && { [ "${completed_rows:-0}" -eq 0 ] || [ "${actual_rows:-0}" -eq 0 ]; }; then
+      sleep 2
+      continue
+    fi
     ready=1
     break
   fi
@@ -85,8 +98,15 @@ done
 
 [ "$ready" -eq 1 ] || die "Stack is up, but demo tables are still empty. Check 'make judge-status' and compose logs."
 
+forecast_rows="$(db_count forecasts)"
+request_rows="$(db_count transport_requests)"
+completed_rows="$(request_status_count completed)"
+planned_rows="$(request_status_count planned)"
+actual_rows="$(actual_backfilled_count)"
+
 ok "Judge/demo stack is ready"
 log "Counts: warehouses=${warehouse_rows} routes=${route_rows} history=${history_rows} forecasts=${forecast_rows} transport_requests=${request_rows}"
+log "Bootstrap summary: completed=${completed_rows} planned=${planned_rows} actuals_backfilled=${actual_rows}"
 log ""
 print_urls >&2
 log ""

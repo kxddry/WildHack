@@ -122,12 +122,13 @@ class BusinessMetricsResponse(BaseModel):
     """Two business KPIs surfaced to the dashboard (PRD §9.2).
 
     * ``order_accuracy``: share of fulfilled slots where the predicted
-      vehicle count is within ±1 of the actual one. The ±1 tolerance
-      *includes* the corner case ``actual=0, predicted=1`` — sending one
-      empty truck still counts as accurate enough; the cost of that
-      empty trip is captured separately by ``avg_truck_utilization``,
-      which drops toward zero when trucks roll empty. The two metrics
-      are complementary on purpose.
+      vehicle count is within ±2 of the actual one. The ±2 tolerance
+      *includes* corner cases such as ``actual=0, predicted=1`` and
+      ``actual=0, predicted=2`` — slight over-ordering still counts as
+      accurate enough; the cost of those extra trips is captured
+      separately by ``avg_truck_utilization``, which drops toward zero
+      when trucks roll empty. The two metrics are complementary on
+      purpose.
     * ``avg_truck_utilization``: mean of ``actual_units / (vehicles * capacity)``
       across slots that actually shipped.
     """

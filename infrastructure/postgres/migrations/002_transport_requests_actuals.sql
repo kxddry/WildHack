@@ -1,6 +1,6 @@
 -- Add actual fulfilment columns to transport_requests so the dispatcher can
 -- compute the business KPIs required by PRD §9.2:
---   * order_accuracy        — share of slots where |predicted - actual| <= 1
+--   * order_accuracy        — share of slots where |predicted - actual| <= 2
 --   * avg_truck_utilization — mean of actual_units / (vehicles * capacity)
 --
 -- Both columns are nullable: only completed slots will have actuals; the

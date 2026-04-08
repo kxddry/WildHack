@@ -72,6 +72,9 @@ load_env() {
   PROMETHEUS_PORT="${PROMETHEUS_PORT:-9090}"
   GRAFANA_PORT="${GRAFANA_PORT:-3001}"
   STEP_INTERVAL_MINUTES="${STEP_INTERVAL_MINUTES:-30}"
+  DEMO_REPLAY_ANCHOR_COUNT="${DEMO_REPLAY_ANCHOR_COUNT:-5}"
+  DEMO_REPLAY_SPACING_HOURS="${DEMO_REPLAY_SPACING_HOURS:-5}"
+  DEMO_REPLAY_LATEST_OFFSET_HOURS="${DEMO_REPLAY_LATEST_OFFSET_HOURS:-7}"
 
   DATA_INGEST_TOKEN="${DATA_INGEST_TOKEN:-}"
   INTERNAL_API_TOKEN="${INTERNAL_API_TOKEN:-}"
@@ -158,13 +161,43 @@ historical_reference_ts() {
     SELECT to_char(
       TIMESTAMP 'epoch'
       + FLOOR(
-          EXTRACT(EPOCH FROM (MAX(timestamp) - INTERVAL '7 hours'))
+          EXTRACT(EPOCH FROM (MAX(timestamp) - INTERVAL '${DEMO_REPLAY_LATEST_OFFSET_HOURS} hours'))
           / ${step_seconds}
         ) * ${step_seconds} * INTERVAL '1 second',
       'YYYY-MM-DD\"T\"HH24:MI:SS'
     )
     FROM route_status_history;
   "
+}
+
+historical_replay_anchors() {
+  local step_seconds=$((STEP_INTERVAL_MINUTES * 60))
+  local oldest_offset_hours=$(((DEMO_REPLAY_ANCHOR_COUNT - 1) * DEMO_REPLAY_SPACING_HOURS))
+
+  compose exec -T postgres \
+    psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "
+      WITH latest AS (
+        SELECT
+          TIMESTAMP 'epoch'
+          + FLOOR(
+              EXTRACT(EPOCH FROM (MAX(timestamp) - INTERVAL '${DEMO_REPLAY_LATEST_OFFSET_HOURS} hours'))
+              / ${step_seconds}
+            ) * ${step_seconds} * INTERVAL '1 second' AS latest_anchor
+        FROM route_status_history
+      ),
+      anchors AS (
+        SELECT latest_anchor - INTERVAL '${oldest_offset_hours} hours' AS oldest_anchor
+        FROM latest
+      )
+      SELECT to_char(
+        oldest_anchor + (gs.n * ${DEMO_REPLAY_SPACING_HOURS}) * INTERVAL '1 hour',
+        'YYYY-MM-DD\"T\"HH24:MI:SS'
+      )
+      FROM anchors
+      CROSS JOIN generate_series(0, ${DEMO_REPLAY_ANCHOR_COUNT} - 1) AS gs(n)
+      WHERE oldest_anchor IS NOT NULL
+      ORDER BY gs.n;
+    "
 }
 
 trigger_backfill() {
@@ -203,6 +236,15 @@ async def main() -> None:
 asyncio.run(main())
 PY
   ok "Immediate backfill completed"
+}
+
+request_status_count() {
+  local status="$1"
+  db_query_value "SELECT COUNT(*) FROM transport_requests WHERE status = '${status}';"
+}
+
+actual_backfilled_count() {
+  db_query_value "SELECT COUNT(*) FROM transport_requests WHERE actual_vehicles IS NOT NULL;"
 }
 
 print_urls() {

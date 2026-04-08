@@ -16,14 +16,14 @@ import {
 import { cn } from "@/lib/utils";
 
 const links = [
-  { href: "/overview", label: "Overview", icon: BarChart3 },
-  { href: "/forecasts", label: "Forecasts", icon: TrendingUp },
-  { href: "/dispatch", label: "Dispatch", icon: Truck },
-  { href: "/quality", label: "Quality", icon: Activity },
-  { href: "/setup", label: "Data", icon: Upload },
-  { href: "/models", label: "Models", icon: Cpu },
-  { href: "/operations", label: "Operations", icon: Workflow },
-  { href: "/readiness", label: "Readiness", icon: CheckCircle },
+  { href: "/overview", label: "Обзор", icon: BarChart3 },
+  { href: "/forecasts", label: "Прогнозы", icon: TrendingUp },
+  { href: "/dispatch", label: "Диспетчеризация", icon: Truck },
+  { href: "/quality", label: "Качество", icon: Activity },
+  { href: "/setup", label: "Данные", icon: Upload },
+  { href: "/models", label: "Модели", icon: Cpu },
+  { href: "/operations", label: "Операции", icon: Workflow },
+  { href: "/readiness", label: "Готовность", icon: CheckCircle },
 ];
 
 export function Sidebar() {
@@ -38,7 +38,7 @@ export function Sidebar() {
             WildHack
           </div>
           <div className="text-xs text-muted-foreground leading-tight">
-            Transport Dispatcher
+            Диспетчер транспорта
           </div>
         </div>
       </div>
