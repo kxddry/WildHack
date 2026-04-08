@@ -58,3 +58,4 @@ experiments/**
 # wbspace autosubmitter caches
 wbspace-au/
 WBSPACE_AUTOSUBMIT.md
+.DS_Store

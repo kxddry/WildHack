@@ -1,9 +1,15 @@
-# WildHack — hybrid local-dev convenience targets.
+# WildHack — local-dev + judge/demo convenience targets.
 #
 # Postgres + db-migrate run inside docker-compose (the only pieces that need
 # containers). Every application service (prediction, dispatcher, scheduler,
 # retraining, dashboard) runs on the host via scripts/local/*.sh — which
 # means fast reloads, native debugging, and no image rebuilds.
+#
+# Separate judge/demo targets use Docker for the whole stack and auto-seed the
+# bundled Team Track snapshot so the dashboard is non-empty after one command:
+#   make judge-up
+#   make judge-status
+#   make judge-down
 #
 # Typical first-time workflow:
 #   make setup     # install venvs + node modules + Playwright
@@ -22,7 +28,7 @@ SHELL := /usr/bin/env bash
 SCRIPTS := scripts/local
 COMPOSE := docker compose -f infrastructure/docker-compose.yml
 
-.PHONY: help setup db-init db-down db-reset up down status logs e2e e2e-keep e2e-smoke e2e-dashboard clean
+.PHONY: help setup db-init db-down db-reset up down status logs e2e e2e-keep e2e-smoke e2e-dashboard judge-up judge-fresh judge-status judge-down clean
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z0-9_-]+:.*?## / {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -63,6 +69,18 @@ e2e-smoke: ## Only run tests/e2e/test_smoke.py (no Playwright)
 
 e2e-dashboard: ## Only run the Playwright dashboard tests
 	@$(SCRIPTS)/e2e.sh --dashboard
+
+judge-up: ## Docker-only judge/demo startup with auto-bootstrap of demo data
+	@./scripts/judge/up.sh
+
+judge-fresh: ## Same as judge-up, but resets Postgres volume first
+	@./scripts/judge/up.sh --fresh
+
+judge-status: ## Show docker service state + seeded table counts
+	@./scripts/judge/status.sh
+
+judge-down: ## Stop the dockerized judge/demo stack
+	@./scripts/judge/down.sh
 
 clean: ## Remove host venvs + run state. Stops postgres. Preserves DB volume.
 	@$(SCRIPTS)/down.sh || true

@@ -69,20 +69,44 @@ graph LR
 - ~4 GB RAM
 - Артефакты модели в `models/`: `model.pkl`, `static_aggs.json`, `fill_values.json` (либо `MOCK_MODE=1` для синтетического fallback в локальной разработке)
 
-### Запуск
+### Запуск для жюри / демо
+
+Рекомендуемый сценарий для показа: одна команда поднимает весь Docker-стек, при необходимости создаёт `.env` из шаблона, загружает приложенный Team Track snapshot в БД и делает первый `predict + dispatch`, чтобы дашборд не был пустым.
 
 ```bash
-# 1. Клонирование
 git clone https://github.com/kxddry/WildHack && cd WildHack
+make judge-up
+```
 
-# 2. Опционально: настройка переменных окружения
-cp .env.example .env   # отредактируйте при необходимости
+Что делает `make judge-up`:
 
-# 3. Запуск всего стека
+1. Поднимает весь стек через Docker Compose.
+2. Ждёт health-check'и сервисов.
+3. Если БД пустая, загружает `Data/raw/train_team_track.parquet`.
+4. Если ещё нет прогнозов и заявок, запускает первый scheduler cycle.
+5. Печатает готовые URL.
+
+Полезные команды:
+
+```bash
+make judge-status   # состояние контейнеров + counts в ключевых таблицах
+make judge-down     # аккуратно остановить стек
+make judge-fresh    # полный чистый перезапуск с пересозданием БД
+```
+
+Первый запуск занимает 2–5 минут на сборку образов и ещё немного на первичный bootstrap данных.
+
+### Ручной запуск через Compose
+
+Если нужен обычный compose-flow без автосидинга:
+
+```bash
+git clone https://github.com/kxddry/WildHack && cd WildHack
+cp .env.example .env   # опционально, если хотите переопределить дефолты
 docker compose -f infrastructure/docker-compose.yml up --build
 ```
 
-Первый запуск занимает 2–5 минут (сборка образов). `db-migrate` отрабатывает после готовности PostgreSQL и применяет SQL-миграции из `infrastructure/postgres/migrations/`. Остальные сервисы стартуют после успешного завершения миграций.
+`db-migrate` отрабатывает после готовности PostgreSQL и применяет SQL-миграции из `infrastructure/postgres/migrations/`. Остальные сервисы стартуют после успешного завершения миграций.
 
 ### Доступ к сервисам
 
