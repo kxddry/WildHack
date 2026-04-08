@@ -18,10 +18,10 @@ catboost_info/
 .local/
 services/*/.venv/
 
-# Large data files — not for git
-Data/
-Notebooks/
-Submissions/
+# Large data files at repo root — not for git
+/Data/
+/Notebooks/
+/Submissions/
 CLAUDE.md.pdf
 
 # Model artifacts (add model.pkl explicitly if small enough)

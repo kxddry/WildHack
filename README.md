@@ -1,340 +1,474 @@
-# WildHack: Система автоматического вызова транспорта
+# WildHack: система автоматического вызова транспорта на склады
 
-## Описание
+Прототип для командного трека WildHack / RWB, который закрывает полный контур принятия решения:
 
-Прототип системы автоматического вызова транспорта на склады на основе прогноза отгрузок. Решает задачу перехода от прогноза объёмов отгрузок к принятию операционных решений — расчёту необходимого количества транспорта и формированию заявок.
+`история статусов товаров -> прогноз отгрузок -> расчет потребности в транспорте -> заявки на подачу машин -> backfill фактов -> контроль качества -> retraining`
 
-**Ключевая идея:** статусные данные обработки товаров (`status_1..8`) поступают на вход предсказательной модели LightGBM, которая прогнозирует объём отгрузок (`target_2h`) на 5 часов вперёд. Диспатчер агрегирует прогнозы по складам и рассчитывает количество машин. Шедулер периодически прогоняет конвейер, контролирует качество и инициирует переобучение, а сервис ретрейнинга по champion/challenger-схеме обновляет модель в production.
+Решение собрано как набор веб-сервисов с общей PostgreSQL, операторским dashboard и контуром MLOps. Репозиторий пригоден и для демонстрации жюри, и для локальной инженерной разработки.
+
+## Зачем это нужно
+
+Ошибка в вызове транспорта бьет по двум сторонам бизнеса одновременно:
+
+- недовызов транспорта приводит к простоям склада, задержкам отгрузок и SLA-рискам;
+- перевызов транспорта создает холостые рейсы и прямые операционные затраты.
+
+Наша цель в прототипе: перейти от реактивной схемы вызова машин к проактивной, когда система каждые 30 минут пересчитывает ожидаемый объем отгрузок и автоматически формирует заявки на транспорт по складам.
+
+## Что уже реализовано
+
+### Сквозной продуктовый контур
+
+1. `prediction-service` принимает актуальные `status_1..8` по маршрутам и прогнозирует `target_2h` на 10 шагов вперед.
+2. `dispatcher-service` агрегирует прогнозы на уровень склада и рассчитывает количество машин.
+3. `scheduler-service` по расписанию запускает `predict + dispatch`, считает качество и backfill'ит факты.
+4. `retraining-service` переобучает модель, ведет реестр версий, поддерживает champion/challenger и shadow promotion.
+5. `dashboard-next` дает оператору интерфейс для readiness-check, контроля прогнозов, заявок, качества, моделей и загрузки новых данных.
+
+### Что особенно важно для защиты
+
+- Есть **one-command demo-flow**: `make judge-up`.
+- Есть **реальный runtime**, а не только ноутбук с моделью.
+- Есть **бизнес-логика перехода от прогноза к заявке**, а не только inference.
+- Есть **контур качества**: WAPE + |RBias|, бизнес-KPI, baseline, retraining.
+- Есть **два сценария эксплуатации**: Docker demo и host-based local development.
+
+## Соответствие требованиям трека
+
+| Требование | Как закрыто в проекте |
+| --- | --- |
+| Предсказательная модель на тренировочных данных | LightGBM-модель в `models/model.pkl` и retraining pipeline в `services/retraining-service` |
+| Веб-сервис или связка веб-сервисов | 4 FastAPI-сервиса + Next.js dashboard + PostgreSQL |
+| Логика работы с прогнозом | Scheduler каждые 30 минут запускает полный цикл и сохраняет прогнозы/заявки в БД |
+| Оценка качества | Онлайн `quality_check`, offline baseline, бизнес-KPI `order_accuracy` и `avg_truck_utilization` |
+| Пути развития продукта | Описаны в разделе `Roadmap` |
+| README с запуском и бизнес-допущениями | Этот файл + детальные документы в `docs/` |
 
 ## Архитектура
 
 ```mermaid
 graph LR
-    subgraph Клиент
-        D[dashboard<br/>Next.js :4000]
+    subgraph UI
+        DASH[dashboard-next<br/>Next.js :4000]
     end
 
-    subgraph "ML-конвейер"
-        PS[prediction-service<br/>FastAPI :8000]
-        DS[dispatcher-service<br/>FastAPI :8001]
-        SS[scheduler-service<br/>FastAPI :8002]
-        RS[retraining-service<br/>FastAPI :8003]
+    subgraph Backend
+        PRED[prediction-service<br/>FastAPI :8000]
+        DISP[dispatcher-service<br/>FastAPI :8001]
+        SCHED[scheduler-service<br/>FastAPI :8002]
+        RETR[retraining-service<br/>FastAPI :8003]
     end
 
-    subgraph Инфраструктура
+    subgraph Storage
         PG[(PostgreSQL :5432)]
         MIG[db-migrate<br/>sidecar]
-        PR[Prometheus :9090]
-        GR[Grafana :3001]
+        MODELS[(models/ volume)]
     end
 
-    D -->|HTTP| PS
-    D -->|HTTP| DS
-    D -->|SQL| PG
-    PS -->|async SQL| PG
-    DS -->|async SQL| PG
-    DS -->|HTTP| PS
-    SS -->|/predict, /dispatch| PS
-    SS -->|HTTP| DS
-    SS -->|/retrain| RS
-    RS -->|/model/shadow/load| PS
-    RS -->|async SQL| PG
-    MIG -.applies migrations.-> PG
-    PR -->|scrape /metrics| PS
-    PR -->|scrape /metrics| DS
-    PR -->|scrape /metrics| SS
-    PR -->|scrape /metrics| RS
-    GR -->|query| PR
+    subgraph Observability
+        PROM[Prometheus :9090]
+        GRAF[Grafana :3001]
+    end
+
+    DASH --> PRED
+    DASH --> DISP
+    DASH --> SCHED
+    DASH --> RETR
+
+    PRED --> PG
+    DISP --> PG
+    SCHED --> PG
+    RETR --> PG
+
+    DISP --> PRED
+    SCHED --> PRED
+    SCHED --> DISP
+    SCHED --> RETR
+    RETR --> PRED
+
+    MIG -. applies migrations .-> PG
+    RETR -. writes artifacts .-> MODELS
+    PRED -. reads artifacts .-> MODELS
+
+    PROM --> PRED
+    PROM --> DISP
+    PROM --> SCHED
+    PROM --> RETR
+    GRAF --> PROM
 ```
 
-### Компоненты
+### Сервисы
 
-| Сервис | Порт | Технология | Назначение |
-|--------|------|------------|------------|
-| `prediction-service` | 8000 | FastAPI + LightGBM | Прогноз отгрузок (`target_2h`) на 10 шагов × 30 мин |
-| `dispatcher-service` | 8001 | FastAPI | Агрегация прогнозов и расчёт количества машин |
-| `scheduler-service` | 8002 | FastAPI + APScheduler | Периодический запуск predict/dispatch, контроль качества, backfill `target_2h` |
-| `retraining-service` | 8003 | FastAPI + LightGBM | Champion/challenger-переобучение, реестр моделей |
-| `dashboard` | 4000 | Next.js 16 + React 19 | Operator UI: Overview / Forecasts / Dispatch / Quality / Readiness |
-| `postgres` | 5432 | PostgreSQL 16 | Единое хранилище данных |
-| `db-migrate` | — | postgres:16-alpine | One-shot sidecar: применяет идемпотентные миграции из `infrastructure/postgres/migrations/` |
-| `prometheus` | 9090 | Prometheus | Сбор метрик со всех сервисов |
-| `grafana` | 3001 | Grafana | Визуализация метрик (порт по умолчанию `3001`, чтобы не конфликтовать с локальным `next dev` на `3000`) |
+| Компонент | Порт | Назначение |
+| --- | --- | --- |
+| `prediction-service` | 8000 | Инференс: прогноз `target_2h` по маршруту на 10 шагов x 30 минут |
+| `dispatcher-service` | 8001 | Агрегация прогнозов по складам и расчет количества машин |
+| `scheduler-service` | 8002 | Оркестрация predict/dispatch, backfill фактов, quality check |
+| `retraining-service` | 8003 | Переобучение, baseline, реестр моделей, shadow/champion promotion |
+| `dashboard-next` | 4000 | UI для жюри, оператора и команды |
+| `postgres` | 5432 | История статусов, прогнозы, заявки, метрики, реестр моделей |
+| `prometheus` | 9090 | Сбор техметрик сервисов |
+| `grafana` | 3001 | Визуализация состояния стека |
 
-## Быстрый старт
+## Логика работы с прогнозом
 
-### Требования
+### Частота и горизонт
 
-- Docker 20.10+ и Docker Compose v2
-- ~4 GB RAM
-- Артефакты модели в `models/`: `model.pkl`, `static_aggs.json`, `fill_values.json` (либо `MOCK_MODE=1` для синтетического fallback в локальной разработке)
+- входные данные приходят с шагом **30 минут**;
+- scheduler пересчитывает прогноз и заявки **каждые 30 минут**;
+- модель строит прогноз на **10 шагов вперед = 5 часов**;
+- scheduler запрашивает dispatch в окне **до 6 часов**, но фактический прогнозный горизонт модели в прототипе составляет **5 часов**.
 
-### Запуск для жюри / демо
+### Как именно мы используем прогноз
 
-Рекомендуемый сценарий для показа: одна команда поднимает весь Docker-стек, при необходимости создаёт `.env` из шаблона, загружает приложенный Team Track snapshot в БД, прогоняет один historical replay для уже-оцениваемого окна, сразу backfill'ит actuals и затем делает текущий `predict + dispatch`. На чистом старте это гарантирует непустые Business KPI в Overview, а не только Forecasts / Dispatch.
+1. На уровне маршрута прогнозируем `target_2h`.
+2. На уровне склада суммируем прогнозы всех маршрутов в одном временном слоте.
+3. Добавляем буфер на неопределенность прогноза.
+4. Переводим объем в количество машин по формуле.
+5. Сохраняем заявку в `transport_requests`.
+
+В текущем прототипе мы сохраняем полный 5-часовой план. С точки зрения операционного использования рекомендуем делить его на две зоны:
+
+- **0-2 часа**: commit zone, по ней можно автоматически вызывать транспорт;
+- **2-5 часов**: readiness zone, по ней имеет смысл готовить транспорт и подтверждать решение на следующем цикле.
+
+### Какие преобразования данных используются
+
+- lag-фичи по `status_1..8` и `target_2h`;
+- diff-фичи по статусам и inventory-признакам;
+- rolling mean / rolling sum;
+- статические профили маршрутов и складов из `static_aggs.json`;
+- fill-values из `fill_values.json`;
+- cold-start fallback через среднюю историю по складу;
+- snap к каноническим 30-минутным слотам;
+- backfill фактических `target_2h` и фактических параметров заявок.
+
+## Предиктивная модель
+
+### Текущий production-compatible артефакт
+
+В репозитории уже лежит совместимая с runtime модель:
+
+- файл: `models/model.pkl`
+- metadata: `models/model_metadata.json`
+- версия: `v20260408_051606`
+
+Метрики этого артефакта по metadata:
+
+| Параметр | Значение |
+| --- | --- |
+| Алгоритм | LightGBM Regressor |
+| Objective | `regression_l1` |
+| Combined score | `0.008289` |
+| WAPE | `0.00808` |
+| RBias | `0.00021` |
+| Число признаков | `312` |
+| Train rows | `1,431,000` |
+| Validation rows | `10,000` |
+| Training window | `30` дней |
+
+### Почему LightGBM
+
+- хорошо работает на табличных временных данных после feature engineering;
+- быстрый inference для онлайнового сервиса;
+- легко переобучается и деплоится;
+- прозрачно сравнивается с baseline.
+
+### Baseline
+
+В `retraining-service` встроен честный baseline для сравнения:
+
+- модель: среднее `target_2h` по `(route_id, hour_of_day, day_of_week)`;
+- реализация: `services/retraining-service/app/core/baseline.py`;
+- baseline считается на том же out-of-time split, что и LightGBM.
+
+Это важно для защиты: мы сравниваем сложную модель не "с пустотой", а с понятным сезонным ориентиром.
+
+## Бизнес-логика вызова транспорта
+
+### Формула
+
+```text
+trucks = max(min_trucks, ceil(total_containers * (1 + buffer_pct) / truck_capacity))
+```
+
+Где:
+
+- `total_containers` — суммарный прогноз отгрузки по складу на слот;
+- `buffer_pct` — запас на ошибку модели;
+- `truck_capacity` — вместимость одной машины;
+- `min_trucks` — минимальное число машин при ненулевом прогнозе.
+
+### Пример
+
+- прогноз по складу на слот: `80` емкостей;
+- буфер: `10%`;
+- вместимость машины: `33`;
+- расчет: `ceil(80 * 1.10 / 33) = ceil(2.67) = 3`.
+
+### Бизнес-допущения
+
+| Допущение | Как зафиксировано |
+| --- | --- |
+| Все машины одинаковой вместимости | `TRUCK_CAPACITY=33` по умолчанию |
+| Транспорт вызывается на уровне склада | Маршруты агрегируются в `office_from_id` |
+| При ненулевом прогнозе нужна минимум 1 машина | `MIN_TRUCKS=1` |
+| Буфер нужен всегда | `BUFFER_PCT=0.10` или adaptive buffer |
+| Привязка маршрута к складу не меняется | Используется как базовое свойство данных |
+| Полный автоплан строится на 5 часов | Совпадает с горизонтом прогноза |
+
+### Что происходит после принятия решения
+
+- заявка пишется в `transport_requests`;
+- позже scheduler backfill'ит `actual_vehicles` и `actual_units`;
+- после этого становятся доступны бизнес-KPI по фактическому исполнению.
+
+## Контур качества
+
+### ML-метрики
+
+Основная метрика и для соревнования, и для online quality checker:
+
+```text
+WAPE  = sum(|y_pred - y_true|) / sum(y_true)
+RBias = abs(sum(y_pred) / sum(y_true) - 1)
+Score = WAPE + RBias
+```
+
+### Бизнес-метрики
+
+Система считает и отдает через API:
+
+- `order_accuracy` — доля слотов, где `|predicted_vehicles - actual_vehicles| <= 1`;
+- `avg_truck_utilization` — средняя загрузка машин `actual_units / (vehicles * capacity)`.
+
+### Автоматический контроль качества
+
+`scheduler-service` раз в час:
+
+- сопоставляет прогнозы и факты;
+- сохраняет качество в `prediction_quality`;
+- поднимает алерты при деградации;
+- отслеживает победы shadow-модели;
+- автоматически промоутит shadow в primary после `3` подряд побед.
+
+## Dashboard
+
+Dashboard нужен не только для красивой демо-картинки, а как операторский BFF над сервисами.
+
+| Страница | Что показывает |
+| --- | --- |
+| `Readiness` | health-check сервисов и наполненность ключевых таблиц |
+| `Overview` | сводные KPI и состояние складов |
+| `Forecasts` | прогнозы по складам и маршрутам |
+| `Dispatch` | сформированные заявки на транспорт |
+| `Quality` | качество модели и бизнес-KPI |
+| `Data` | загрузка снапшота истории и Team Track test flow |
+| `Models` | реестр моделей, retrain, shadow, champion |
+| `Operations` | pipeline history, quality alerts, ручные триггеры |
+
+## API: основные контракты
+
+Полный справочник лежит в `docs/api-reference.md`. Ниже только ключевая поверхность.
+
+| Сервис | Эндпоинты |
+| --- | --- |
+| `prediction-service` | `POST /predict`, `POST /predict/batch`, `GET /model/info`, `POST /model/reload`, `POST /model/shadow/load` |
+| `dispatcher-service` | `POST /dispatch`, `GET /dispatch/schedule`, `GET /warehouses`, `GET /api/v1/transport-requests`, `GET /api/v1/metrics/business` |
+| `scheduler-service` | `GET /pipeline/status`, `POST /pipeline/trigger`, `GET /pipeline/history`, `POST /quality/trigger`, `GET /quality/alerts` |
+| `retraining-service` | `POST /retrain`, `GET /models`, `GET /models/champion`, `POST /models/{version}/shadow`, `POST /models/{version}/promote` |
+
+### Дополнительные важные возможности
+
+- `POST /upload-dataset` — загружает новый history snapshot как authoritative state;
+- `POST /team-track/preview` — проверка Team Track test template;
+- `POST /team-track/submission` — генерация submission CSV по выбранной версии модели.
+
+## Данные и хранилище
+
+### Основные таблицы PostgreSQL
+
+| Таблица | Назначение |
+| --- | --- |
+| `route_status_history` | История `status_1..8` и `target_2h` |
+| `forecasts` | Сохраненные прогнозы primary и shadow |
+| `transport_requests` | Заявки на транспорт и фактическое исполнение |
+| `routes`, `warehouses` | Справочники |
+| `model_metadata` | Реестр версий моделей |
+| `pipeline_runs` | История запусков scheduler |
+| `prediction_quality` | История WAPE / RBias / combined score |
+| `retrain_history` | История retraining запусков |
+
+### Откуда берутся данные для демо
+
+Judge-flow использует `Data/raw/train_team_track.parquet`:
+
+- если БД пустая, данные автоматически загружаются;
+- затем запускается historical replay;
+- затем запускается текущий `predict + dispatch`;
+- в результате dashboard сразу непустой и пригоден для демонстрации.
+
+## Запуск
+
+### Вариант 1: режим для жюри / демо
+
+Самый полезный сценарий для быстрой проверки:
 
 ```bash
-git clone https://github.com/kxddry/WildHack && cd WildHack
+git clone https://github.com/kxddry/WildHack
+cd WildHack
 make judge-up
 ```
 
 Что делает `make judge-up`:
 
-1. Поднимает весь стек через Docker Compose.
-2. Ждёт health-check'и сервисов.
-3. Если БД пустая, загружает `Data/raw/train_team_track.parquet`.
-4. На чистой БД запускает historical scheduler cycle на прошлом окне, сразу backfill'ит `transport_requests.actual_*` и переводит matured requests в `completed`.
-5. Затем запускает обычный current scheduler cycle, чтобы были и completed historical requests, и свежие planned/dispatched слоты.
-6. Печатает готовые URL.
+1. поднимает весь Docker-стек;
+2. автоматически создает `.env` из шаблона, если его нет;
+3. проверяет health всех сервисов;
+4. при пустой БД загружает demo snapshot;
+5. прогоняет historical replay и current pipeline;
+6. печатает URL сервисов.
 
 Полезные команды:
 
 ```bash
-make judge-status   # состояние контейнеров + counts в ключевых таблицах
-make judge-down     # аккуратно остановить стек
-make judge-fresh    # полный чистый перезапуск с пересозданием БД
+make judge-status
+make judge-down
+make judge-fresh
 ```
 
-Первый запуск занимает 2–5 минут на сборку образов и ещё немного на первичный bootstrap данных.
-
-### Ручной запуск через Compose
-
-Если нужен обычный compose-flow без автосидинга:
+### Вариант 2: обычный Docker Compose
 
 ```bash
-git clone https://github.com/kxddry/WildHack && cd WildHack
-cp .env.example .env   # опционально, если хотите переопределить дефолты
+cp .env.example .env
 docker compose -f infrastructure/docker-compose.yml up --build
 ```
 
-`db-migrate` отрабатывает после готовности PostgreSQL и применяет SQL-миграции из `infrastructure/postgres/migrations/`. Остальные сервисы стартуют после успешного завершения миграций.
+Минимум, что стоит проверить в `.env` перед первым запуском:
 
-### Доступ к сервисам
+- `DATA_INGEST_TOKEN`
+- `INTERNAL_API_TOKEN`
+
+Для локального ноутбука можно оставить demo-значения из шаблона, но для любого общего окружения токены нужно заменить.
+
+Поведение `prediction-service` при старте:
+
+- по умолчанию сервис работает в **fail-fast** режиме и требует `models/model.pkl`, `models/static_aggs.json`, `models/fill_values.json`;
+- если артефактов нет, можно включить локальный fallback через `MOCK_MODE=1`, но этот режим предназначен только для разработки.
+
+### Вариант 3: локальная разработка на хосте
+
+```bash
+make setup
+make db-init
+make up
+```
+
+Плюсы host-mode:
+
+- быстрый reload Python-сервисов;
+- удобная отладка;
+- не нужно пересобирать образы после каждой правки.
+
+Полезные команды:
+
+```bash
+make status
+make logs
+make down
+make e2e
+make e2e-smoke
+make e2e-dashboard
+```
+
+## Доступные URL
 
 | Сервис | URL |
-|--------|-----|
+| --- | --- |
 | Dashboard | http://localhost:4000 |
-| Prediction API (Swagger) | http://localhost:8000/docs |
-| Dispatcher API (Swagger) | http://localhost:8001/docs |
-| Scheduler API (Swagger) | http://localhost:8002/docs |
-| Retraining API (Swagger) | http://localhost:8003/docs |
+| Prediction Swagger | http://localhost:8000/docs |
+| Dispatcher Swagger | http://localhost:8001/docs |
+| Scheduler Swagger | http://localhost:8002/docs |
+| Retraining Swagger | http://localhost:8003/docs |
 | Prometheus | http://localhost:9090 |
-| Grafana | http://localhost:3001 (логин `admin` / `admin`, анонимный доступ выключен по умолчанию) |
+| Grafana | http://localhost:3001 |
 
-### Демо-режим без модели (`MOCK_MODE`)
+## Тестирование
 
-`prediction-service` по умолчанию **fail-fast** падает при старте, если отсутствует хотя бы один из артефактов (`model.pkl`, `static_aggs.json`, `fill_values.json`). Это сделано намеренно, чтобы ни одно окружение не «молчком» отдавало синтетические прогнозы за реальные.
+В репозитории есть несколько уровней тестов:
 
-Для локальной разработки можно включить детерминированный синтетический fallback:
+- unit-тесты по сервисам;
+- интеграционные тесты;
+- smoke e2e;
+- browser e2e для dashboard на Playwright.
 
-```bash
-MOCK_MODE=1 docker compose -f infrastructure/docker-compose.yml up --build prediction-service
-```
-
-В этом режиме `/health` возвращает `status: "mock"`, а в логах будет заметное предупреждение.
-
-## Бизнес-логика
-
-### Прогнозная модель
-
-- **Алгоритм:** LightGBM Regressor (objective `regression_l1`, MAE)
-- **Целевая переменная:** `target_2h` — количество ёмкостей, отгруженных по маршруту за последние 2 часа
-- **Горизонт:** 10 шагов × 30 минут = 5 часов вперёд
-- **Признаки:** lag-фичи, скользящие средние, разности (diff) по `status_1..8`, статические агрегаты (`static_aggs.json`) и медианные fill-значения (`fill_values.json`) из обучающей выборки
-- **Окно истории для inference:** 288 наблюдений (≈6 дней) из таблицы `route_status_history`
-- **Cold-start fallback:** при <24 наблюдениях (12 часов) используется среднее по складу
-- **Shadow-модель:** опционально загружается параллельно с primary; её прогнозы сохраняются в `forecasts` с отдельной `model_version` для A/B-сравнения
-
-### Алгоритм диспатчинга
-
-1. **Агрегация прогнозов** — суммирование `predicted_value` по всем маршрутам склада в каждом временном слоте
-2. **Расчёт количества машин:**
-
-```
-trucks = max(min_trucks, ceil(total_containers * (1 + buffer_pct) / truck_capacity))
-```
-
-3. **Формирование заявок** в `transport_requests` со строкой `calculation`, фиксирующей формулу
-
-**Пример:**
-- Прогноз: 80 ёмкостей на склад за слот
-- Буфер 10% → 88 ёмкостей
-- Вместимость машины: 33
-- Результат: `ceil(88 / 33) = 3` машины
-
-Поддерживается опциональный **adaptive buffer** (`ADAPTIVE_BUFFER=true`), который масштабирует буфер между `MIN_BUFFER_PCT` и `MAX_BUFFER_PCT` в зависимости от неопределённости прогноза.
-
-### Бизнес-допущения
-
-| # | Допущение | Обоснование |
-|---|-----------|-------------|
-| 1 | Все машины одной вместимости | Параметр `TRUCK_CAPACITY` (33 ёмкости по умолчанию). Расширяется до гетерогенного транспорта |
-| 2 | Транспорт вызывается на уровне склада | Маршруты агрегируются до `office_from_id` — машина приезжает на склад, не на маршрут |
-| 3 | Буфер 10% (или адаптивный) | Компенсирует ошибку модели; задаётся `BUFFER_PCT` / `ADAPTIVE_BUFFER` |
-| 4 | Горизонт планирования — 5 часов | 10 шагов × 30 мин — достаточно для заблаговременной подачи транспорта |
-| 5 | Один маршрут — один склад | Привязка `route → warehouse` фиксированная (подтверждено организаторами) |
-| 6 | Минимум `MIN_TRUCKS` при ненулевом прогнозе | По умолчанию 1: лучше отправить лишнюю машину, чем оставить склад без транспорта |
-
-## API
-
-### Prediction Service (:8000)
-
-| Метод | Эндпоинт | Назначение |
-|-------|----------|-----------|
-| POST | `/predict` | Прогноз для одного маршрута (10 шагов) |
-| POST | `/predict/batch` | Параллельный пакетный прогноз (semaphore = 10) |
-| GET | `/model/info` | Метаданные модели |
-| POST | `/model/reload` | Hot-reload primary-модели с диска |
-| POST | `/model/reload-features` | Перечитать `static_aggs.json` / `fill_values.json` |
-| POST | `/model/shadow/load` | Загрузить shadow-модель для A/B (`?path=...`) |
-| POST | `/model/shadow/promote` | Промоутить shadow → primary |
-| DELETE | `/model/shadow` | Снять shadow-модель |
-| GET | `/health` | `healthy` / `mock` / `degraded` |
-| GET | `/metrics` | Prometheus-метрики |
-
-Все эндпоинты доступны и под префиксом `/api/v1/...` (PRD §6).
-
-### Dispatcher Service (:8001)
-
-| Метод | Эндпоинт | Назначение |
-|-------|----------|-----------|
-| POST | `/dispatch` | Расчёт транспорта для склада (forecasts inline или из БД) |
-| GET | `/dispatch/schedule?warehouse_id=` | Сохранённое расписание заявок |
-| GET | `/warehouses` | Список складов с агрегатами |
-| GET | `/api/v1/transport-requests?office_id=&from=&to=` | PRD §6.2 — заявки по складу за окно |
-| GET | `/api/v1/metrics/business?from=&to=` | PRD §9.2 — `order_accuracy` и `avg_truck_utilization` |
-| GET | `/health` | Health-check |
-| GET | `/metrics` | Prometheus-метрики |
-
-### Scheduler Service (:8002)
-
-| Метод | Эндпоинт | Назначение |
-|-------|----------|-----------|
-| GET | `/pipeline/status` | Текущий статус оркестратора и quality checker |
-| POST | `/pipeline/trigger?reference_ts=` | Ручной запуск цикла predict + dispatch; `reference_ts` опционален и нужен для historical/internal replay (`X-Internal-Token`) |
-| GET | `/pipeline/history?limit=` | Аудит-лог запусков из `pipeline_runs` |
-| POST | `/quality/trigger` | Внеочередной расчёт качества (`X-Internal-Token`) |
-| GET | `/quality/alerts` | Активные алерты по дрейфу качества |
-| GET | `/health` | Health-check |
-
-Внутри Scheduler работают три APScheduler-задачи:
-- **prediction_cycle** — каждые `PREDICTION_INTERVAL_MINUTES` (по умолчанию 30 мин)
-- **quality_check** — каждые `QUALITY_CHECK_INTERVAL_MINUTES` (по умолчанию 60 мин); промоутит shadow → primary после `SHADOW_PROMOTE_STREAK_THRESHOLD` (3) подряд побед
-- **backfill_target_2h** — каждые 30 мин, дописывает фактический `target_2h` в `route_status_history`, backfill'ит `transport_requests.actual_*` по каноническим слотам и переводит matured requests в `completed`
-
-### Retraining Service (:8003)
-
-| Метод | Эндпоинт | Назначение |
-|-------|----------|-----------|
-| POST | `/retrain` | Полный цикл: fetch → features → train → eval → register → (shadow promote) |
-| GET | `/retrain/status` | Результат последнего запуска |
-| GET | `/models` | Реестр всех версий из `model_metadata` |
-| GET | `/models/champion` | Текущий champion (наименьший `cv_score`) |
-| POST | `/models/{version}/shadow` | Загрузить версию как shadow в prediction-service |
-| POST | `/models/{version}/promote` | Промоутить версию в primary |
-| GET | `/health` | Health-check |
-
-Полный справочник API с примерами запросов: [docs/api-reference.md](docs/api-reference.md).
-
-## База данных
-
-Схема создаётся `infrastructure/postgres/init.sql` при первом запуске и расширяется идемпотентными миграциями из `infrastructure/postgres/migrations/` (применяются sidecar-сервисом `db-migrate` на каждом `compose up`).
-
-| Таблица | Назначение |
-|---------|-----------|
-| `route_status_history` | История наблюдений `status_1..8` + `target_2h` (источник для feature engineering) |
-| `forecasts` | Сохранённые прогнозы (primary и shadow) |
-| `transport_requests` | Заявки на транспорт + `actual_vehicles` / `actual_units` для KPI |
-| `routes`, `warehouses` | Справочники маршрутов и складов |
-| `model_metadata` | Реестр обученных моделей (champion/challenger) |
-| `pipeline_runs` | Аудит-лог запусков scheduler |
-| `prediction_quality` | История WAPE / RBias / combined_score |
-| `retrain_history` | Аудит-лог переобучений |
-
-## Мониторинг и качество
-
-### Метрика модели
-
-**WAPE + |Relative Bias|** (используется и в соревновании, и онлайн `quality_check`):
-
-```
-WAPE  = sum(|y_pred - y_true|) / sum(y_true)
-RBias = |sum(y_pred) / sum(y_true) - 1|
-score = WAPE + RBias
-```
-
-### Бизнес-KPI (PRD §9.2)
-
-- `order_accuracy` — доля слотов, где `|predicted_vehicles - actual_vehicles| ≤ 1`
-- `avg_truck_utilization` — среднее `actual_units / (vehicles * capacity)` по выполненным слотам
-
-Доступны через `GET /api/v1/metrics/business` и страницу **Quality** в дашборде.
-
-### Prometheus / Grafana
-
-- Prometheus собирает HTTP-метрики со всех четырёх FastAPI-сервисов через `/metrics` (`prometheus-fastapi-instrumentator`)
-- Grafana подгружает дашборды и datasources из `infrastructure/grafana/provisioning/`
-
-## Структура проекта
-
-```
-WildHack/
-├── README.md                           # Этот файл
-├── .env.example                        # Шаблон переменных окружения
-├── docs/
-│   ├── architecture.md                 # Архитектура системы
-│   ├── business-logic.md               # Бизнес-логика и допущения
-│   ├── api-reference.md                # Справочник API
-│   ├── deployment.md                   # Руководство по развёртыванию
-│   └── PRD_WildHack_Logistics.md       # Product Requirements Document
-├── services/
-│   ├── prediction-service/             # FastAPI + LightGBM, prediction + shadow
-│   ├── dispatcher-service/             # FastAPI, расчёт транспорта + PRD v1 API
-│   ├── scheduler-service/              # FastAPI + APScheduler, оркестратор
-│   ├── retraining-service/             # FastAPI + LightGBM, champion/challenger
-│   └── dashboard-next/                 # Next.js 16 + React 19 dashboard
-├── infrastructure/
-│   ├── docker-compose.yml              # Оркестрация всех сервисов
-│   ├── postgres/
-│   │   ├── init.sql                    # Базовая схема (создаётся при первом запуске)
-│   │   └── migrations/                 # Идемпотентные SQL-миграции (применяет db-migrate)
-│   ├── prometheus/prometheus.yml       # Targets для всех сервисов
-│   └── grafana/                        # Provisioning: datasources + dashboards
-├── models/                             # Артефакты модели (model.pkl, static_aggs.json, fill_values.json, shadow_model.pkl)
-├── experiments/                        # Эксперименты, обучение, переиспользуемые модули
-├── scripts/                            # Утилиты для подготовки и сидинга данных
-└── tests/                              # Smoke- и e2e-тесты на уровне всего стека
-```
-
-## Технологии
-
-| Категория | Технология |
-|-----------|------------|
-| Backend | Python 3.11, FastAPI, Pydantic v2, pydantic-settings, asyncpg / SQLAlchemy async |
-| Шедулинг | APScheduler |
-| ML | LightGBM, scikit-learn, pandas, numpy |
-| Frontend | Next.js 16, React 19, TypeScript 5, Tailwind CSS 4, Recharts, Radix UI, lucide-react |
-| База данных | PostgreSQL 16 |
-| Контейнеризация | Docker, Docker Compose v2 |
-| Мониторинг | Prometheus, Grafana, prometheus-fastapi-instrumentator |
-
-## Тесты
+Быстрые команды:
 
 ```bash
-# Unit / integration тесты по сервисам
-cd services/prediction-service && pytest tests/ -v
-cd services/dispatcher-service && pytest tests/ -v
-cd services/retraining-service && pytest tests/ -v
-
-# E2E smoke тесты на поднятый стек (требуют запущенный compose)
-pytest tests/e2e/ -v
+make e2e
+make e2e-smoke
+make e2e-dashboard
 ```
 
-## Пути развития
+## Структура репозитория
 
-1. **Асинхронная шина событий** — Redis Streams / NATS для отвязки prediction → dispatcher → dashboard
-2. **Гетерогенный транспорт** — несколько типов машин с разной вместимостью + bin-packing
-3. **Дополнительные признаки** — погода, праздники, промо-акции, день недели
-4. **Расширение champion/challenger** — несколько одновременных shadow-моделей и многокритериальное сравнение
-5. **Партиционирование `route_status_history`** по `warehouse_id` или времени при росте объёма данных
-6. **CI/CD с автопромоутом** — пайплайн обучения → тест → канареечный shadow → автоматический промоут по KPI
+```text
+services/
+  prediction-service/   FastAPI inference API
+  dispatcher-service/   FastAPI transport planner
+  scheduler-service/    FastAPI + APScheduler orchestration
+  retraining-service/   FastAPI retrain + model registry + team track
+  dashboard-next/       Next.js operator UI
+infrastructure/
+  docker-compose.yml
+  postgres/
+  prometheus/
+  grafana/
+scripts/
+  judge/                one-command demo flow
+  local/                host-based dev workflow
+models/                 runtime model artifacts
+docs/                   detailed architecture / business / deployment docs
+tests/                  e2e and integration tests
+final_submissions/      offline training artifacts and submissions
+```
+
+## Product roadmap
+
+Следующие шаги для развития решения:
+
+1. **Гетерогенный транспорт**  
+   Вместо одной вместимости машины перейти к нескольким типам ТС и оптимизации под mix флота.
+
+2. **Cost-aware dispatching**  
+   Заменить формулу `ceil` на оптимизацию с учетом стоимости недовызова, холостого рейса и SLA.
+
+3. **Больше внешних признаков**  
+   Добавить календарь акций, выходные, погоду, дорожную ситуацию, ETA, тип склада и сезонность по регионам.
+
+4. **Event-driven ingestion**  
+   Перейти от snapshot ingestion к потоковой схеме через Kafka / NATS / CDC.
+
+5. **Канареечный rollout по складам**  
+   Включать auto-dispatch сначала на части складов и сравнивать с контрольной группой.
+
+6. **Замкнутый feedback-loop**  
+   Учитывать фактические отклонения заявок при расчете буфера на уровне конкретного склада и часа суток.
+
+## Детальная документация
+
+- `docs/architecture.md` — архитектура по сервисам и инфраструктуре
+- `docs/business-logic.md` — доменная модель, допущения и алгоритм диспатчинга
+- `docs/api-reference.md` — API-контракты и примеры запросов
+- `docs/deployment.md` — развертывание и переменные окружения
+- `docs/PRD_WildHack_Logistics.md` — продуктовая постановка
+
+## Итог
+
+Этот репозиторий описывает не просто модель прогноза, а полноценный прототип системы принятия логистических решений:
+
+- он умеет прогнозировать отгрузки;
+- переводит прогноз в заявки на транспорт;
+- измеряет качество решения;
+- поддерживает операционную эксплуатацию;
+- готов к демонстрации и дальнейшему развитию в production.
