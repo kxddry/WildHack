@@ -2,7 +2,6 @@
 
 import pytest
 import pandas as pd
-import numpy as np
 
 from app.core.feature_engine import (
     InferenceFeatureEngine,

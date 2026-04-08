@@ -5,8 +5,6 @@ import time
 
 from fastapi import APIRouter, HTTPException, Query
 
-logger = logging.getLogger(__name__)
-
 from app.api.schemas import (
     DispatchRequest,
     DispatchResponse,
@@ -18,6 +16,8 @@ from app.api.schemas import (
 from app.config import settings
 from app.core.dispatcher import DispatchCalculator
 from app.storage import postgres
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
