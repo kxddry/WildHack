@@ -13,11 +13,11 @@ import {
 import { cn } from "@/lib/utils";
 
 const links = [
-  { href: "/readiness", label: "Readiness", icon: CheckCircle },
   { href: "/overview", label: "Overview", icon: BarChart3 },
   { href: "/forecasts", label: "Forecasts", icon: TrendingUp },
   { href: "/dispatch", label: "Dispatch", icon: Truck },
   { href: "/quality", label: "Quality", icon: Activity },
+  { href: "/readiness", label: "Readiness", icon: CheckCircle },
 ];
 
 export function Sidebar() {

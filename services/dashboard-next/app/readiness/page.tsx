@@ -49,10 +49,16 @@ export default function ReadinessPage() {
         detail: wh.ok ? `Connected — ${warehouses.length} warehouse(s)` : wh.error!,
       });
 
+      // Prediction/Dispatcher services report status as "healthy" (OK),
+      // "mock" (OK with mock model), "degraded" (warn), anything else → warn.
+      const HEALTHY_STATUSES = new Set(["ok", "healthy", "mock"]);
+      const statusToCheck = (s: string | undefined): CheckStatus =>
+        s && HEALTHY_STATUSES.has(s) ? "pass" : "warn";
+
       // 2. Prediction Service
       results.push({
         name: "Prediction Service",
-        status: prediction.ok ? (prediction.data!.status === "ok" ? "pass" : "warn") : "fail",
+        status: prediction.ok ? statusToCheck(prediction.data!.status) : "fail",
         detail: prediction.ok
           ? `Status: ${prediction.data!.status}, uptime ${Math.round(prediction.data!.uptime_seconds ?? 0)}s`
           : prediction.error!,
@@ -61,7 +67,7 @@ export default function ReadinessPage() {
       // 3. Dispatcher Service
       results.push({
         name: "Dispatcher Service",
-        status: dispatcher.ok ? (dispatcher.data!.status === "ok" ? "pass" : "warn") : "fail",
+        status: dispatcher.ok ? statusToCheck(dispatcher.data!.status) : "fail",
         detail: dispatcher.ok
           ? `Status: ${dispatcher.data!.status}, uptime ${Math.round(dispatcher.data!.uptime_seconds ?? 0)}s`
           : dispatcher.error!,
