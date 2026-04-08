@@ -39,3 +39,17 @@ tsconfig.tsbuildinfo
 
 # Screenshots
 *.png
+
+# ============================================================
+# Experiments — track only core/ and required helper modules
+# (final submissions live in final_submissions/ and are tracked separately)
+# ============================================================
+experiments/**
+!experiments/core
+!experiments/core/**
+!experiments/precompute_features.py
+!experiments/solo_final_v5.py
+
+# wbspace autosubmitter caches
+wbspace-au/
+WBSPACE_AUTOSUBMIT.md

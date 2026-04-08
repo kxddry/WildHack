@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Caches / temporary
+*.log
+*.tmp
+.DS_Store
+
+# Local data caches (NOT for repo)
+full_cache/
+team_final_cache/
+team_feats_cache/
+precomputed/
+saved_models/
+team_block*/
+team_final_out/
+solo_full_train_out/
+solo_*_out/
+
+# Avoid accidental commits of raw data
+Data/
+../Data/
+*.parquet
+
+# IDE
+.vscode/
+.idea/
+*.swp
