@@ -1,0 +1,24 @@
+wing: wildhack
+rooms:
+- name: experiments
+  description: Files from experiments/
+- name: testing
+  description: Files from tests/
+- name: backend
+  description: Files from models/
+- name: documentation
+  description: Files from docs/
+- name: scripts
+  description: Files from scripts/
+- name: submissions
+  description: Files from Submissions/
+- name: configuration
+  description: Files from infrastructure/
+- name: data
+  description: Files from Data/
+- name: notebooks
+  description: Files from Notebooks/
+- name: planning
+  description: Files from specs/
+- name: general
+  description: Files that don't fit other rooms
