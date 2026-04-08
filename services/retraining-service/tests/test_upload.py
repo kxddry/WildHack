@@ -19,7 +19,6 @@ from fastapi.testclient import TestClient
 
 from app.api import upload as upload_module
 from app.api.upload import (
-    ALLOWED_EXTENSIONS,
     MAX_CELLS,
     MAX_CSV_ROWS,
     REQUIRED_COLUMNS,

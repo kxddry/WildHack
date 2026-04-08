@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Model retraining engine.
 
 Fetches fresh data, builds features matching InferenceFeatureEngine,
@@ -11,6 +9,8 @@ prediction-service loads models via pickle (ModelManager.load). Only
 models produced by this service are loaded — no untrusted content is
 deserialized from external sources.
 """
+
+from __future__ import annotations
 
 import json
 import logging
