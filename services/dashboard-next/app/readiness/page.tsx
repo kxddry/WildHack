@@ -1,7 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
-import { CheckCircle, XCircle, AlertTriangle } from "lucide-react";
+import { CheckCircle, XCircle, AlertTriangle, Upload } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import type { HealthCheck, CheckStatus, Warehouse } from "@/lib/types";
 
@@ -27,19 +28,31 @@ async function fetchJson<T>(url: string): Promise<{ data: T | null; ok: boolean;
 export default function ReadinessPage() {
   const [checks, setChecks] = useState<HealthCheck[]>([]);
   const [loading, setLoading] = useState(true);
+  const [emptyDb, setEmptyDb] = useState(false);
 
   useEffect(() => {
     async function runChecks() {
       const results: HealthCheck[] = [];
 
-      // Fetch shared data once
-      const wh = await fetchJson<{ warehouses: Warehouse[] }>("/api/db/warehouses");
-      const warehouses = wh.data?.warehouses ?? [];
-      const health = await Promise.all([
+      // Fetch shared data once. Stats come from a dedicated endpoint that
+      // returns REAL row counts via COUNT(*) — not derivations from the
+      // warehouses list. The previous implementation reported "forecasts
+      // count = warehouses with latest_forecast_at", which was misleading
+      // for the empty-state diagnostics this page exists to surface.
+      const [wh, stats, ...health] = await Promise.all([
+        fetchJson<{ warehouses: Warehouse[] }>("/api/warehouses"),
+        fetchJson<{
+          warehouses: number;
+          routes: number;
+          route_status_history: number;
+          forecasts: number;
+          transport_requests: number;
+        }>("/api/readiness/stats"),
         fetchJson<{ status: string; uptime_seconds?: number }>("/api/health/prediction"),
         fetchJson<{ status: string; uptime_seconds?: number }>("/api/health/dispatcher"),
         fetchJson<{ model_type: string; model_version: string; forecast_horizon: number }>("/api/model/info"),
       ]);
+      const warehouses = wh.data?.warehouses ?? [];
       const [prediction, dispatcher, model] = health;
 
       // 1. PostgreSQL
@@ -82,25 +95,33 @@ export default function ReadinessPage() {
           : model.error ?? "Model not loaded",
       });
 
-      // 5-9. Database tables (derived from cached data)
-      const routeCount = warehouses.reduce((s, w) => s + Number(w.route_count), 0);
-      const tableChecks: Array<{ name: string; count: number }> = [
-        { name: "warehouses", count: warehouses.length },
-        { name: "routes", count: routeCount },
-        { name: "route_status_history", count: warehouses.length > 0 ? warehouses.length : 0 },
-        { name: "forecasts", count: warehouses.filter(w => w.latest_forecast_at).length },
-        { name: "transport_requests", count: warehouses.reduce((s, w) => s + Number(w.upcoming_trucks), 0) },
-      ];
+      // 5-9. Database tables — real COUNT(*) values via /api/readiness/stats
+      // (proxied to retraining-service). Falls back to the database-unavailable
+      // warning only if both the warehouses fetch AND the stats fetch failed.
+      const tableNames = [
+        "warehouses",
+        "routes",
+        "route_status_history",
+        "forecasts",
+        "transport_requests",
+      ] as const;
 
-      for (const { name, count } of tableChecks) {
+      for (const name of tableNames) {
+        const count = stats.data ? stats.data[name] : 0;
+        const available = stats.ok;
         results.push({
           name: `Table: ${name}`,
-          status: wh.ok && count > 0 ? "pass" : wh.ok ? "warn" : "fail",
-          detail: wh.ok ? `${count} row(s) found` : "Database unavailable",
+          status: available && count > 0 ? "pass" : available ? "warn" : "fail",
+          detail: available ? `${count} row(s) found` : (stats.error ?? "Database unavailable"),
         });
       }
 
       setChecks(results);
+      // Show the "No data yet" CTA only when the DB is reachable AND
+      // genuinely empty. Uses the real warehouse count from stats, not
+      // the /api/warehouses list length (same value but pinned to
+      // the same source the table checks report on).
+      setEmptyDb(stats.ok && (stats.data?.warehouses ?? 0) === 0);
       setLoading(false);
     }
 
@@ -115,6 +136,29 @@ export default function ReadinessPage() {
           Health checks for all system components
         </p>
       </div>
+
+      {emptyDb && (
+        <Card className="border-primary/40 bg-primary/5">
+          <CardContent className="pt-6">
+            <div className="flex items-start gap-4">
+              <Upload className="h-6 w-6 text-primary shrink-0 mt-0.5" />
+              <div className="flex-1 min-w-0">
+                <p className="font-semibold text-sm">No data yet</p>
+                <p className="text-sm text-muted-foreground mt-1">
+                  The database is connected but empty. Upload your historical
+                  observations to bootstrap warehouses, routes, and forecasts.
+                </p>
+                <Link
+                  href="/setup"
+                  className="inline-flex items-center gap-1.5 mt-3 text-sm font-medium text-primary hover:underline"
+                >
+                  Upload dataset →
+                </Link>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {loading

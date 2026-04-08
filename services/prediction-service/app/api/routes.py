@@ -3,9 +3,11 @@
 import asyncio
 import logging
 import time
+from datetime import datetime
+from typing import Any
 
 import pandas as pd
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.api.schemas import (
     BatchPredictRequest,
@@ -16,6 +18,7 @@ from app.api.schemas import (
     PredictRequest,
     PredictResponse,
 )
+from app.api.security import require_internal_token
 from app.config import settings
 from app.core.feature_engine import InferenceFeatureEngine
 from app.storage import postgres
@@ -23,6 +26,12 @@ from app.storage import postgres
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+# Dedicated router for the dashboard-facing read APIs. Kept separate from
+# ``router`` so main.py can mount it exactly once under ``/api/v1`` without
+# the double-mount quirk that the legacy router has (re-mounted under
+# ``/api/v1`` for backward compatibility). Prevents paths like
+# ``/api/v1/api/v1/forecasts``.
+router_v1 = APIRouter()
 
 feature_engine = InferenceFeatureEngine()
 
@@ -165,6 +174,12 @@ async def _run_single_prediction(request: Request, req: PredictRequest) -> Predi
         )
 
     # 7. Save forecasts to PostgreSQL
+    #
+    # Source of truth for the active model version is ModelManager.runtime_version
+    # (metadata.model_version → artifact stem → legacy setting). This ensures a
+    # freshly-promoted model is reflected in both /model/info and the forecasts
+    # rows written here, with no dependency on the static config label.
+    runtime_version = model_manager.runtime_version
     forecasts_json = [fs.model_dump(mode="json") for fs in forecast_steps]
     try:
         await postgres.save_forecasts(
@@ -172,7 +187,7 @@ async def _run_single_prediction(request: Request, req: PredictRequest) -> Predi
             warehouse_id=warehouse_id,
             anchor_ts=anchor_ts,
             forecasts_json=forecasts_json,
-            model_version=settings.model_version,
+            model_version=runtime_version,
         )
     except Exception:
         logger.exception("Failed to save forecasts for route_id=%d", req.route_id)
@@ -183,7 +198,7 @@ async def _run_single_prediction(request: Request, req: PredictRequest) -> Predi
         warehouse_id=warehouse_id,
         anchor_timestamp=anchor_ts,
         forecasts=forecast_steps,
-        model_version=settings.model_version,
+        model_version=runtime_version,
         shadow_forecasts=shadow_steps,
     )
 
@@ -250,12 +265,18 @@ async def health(request: Request) -> HealthResponse:
 
 @router.get("/model/info", response_model=ModelInfoResponse)
 async def model_info(request: Request) -> ModelInfoResponse:
-    """Return model metadata and introspected properties."""
+    """Return model metadata and introspected properties.
+
+    Reports the runtime model version — i.e. what the model manager will
+    actually use to predict right now — not the static config label. This
+    closes the split-brain where /model/info could report an older version
+    than the forecasts being written to Postgres after a promote.
+    """
     model_manager = _get_model_manager(request)
     info = model_manager.info()
 
     return ModelInfoResponse(
-        model_version=settings.model_version,
+        model_version=info.get("model_version") or model_manager.runtime_version,
         model_type=info.get("model_type", "unknown"),
         objective=info.get("objective", "unknown"),
         cv_score=info.get("cv_score"),
@@ -266,9 +287,17 @@ async def model_info(request: Request) -> ModelInfoResponse:
     )
 
 
-@router.post("/model/reload")
+@router.post(
+    "/model/reload",
+    dependencies=[Depends(require_internal_token)],
+)
 async def reload_model(request: Request) -> dict:
-    """Hot-reload the model from disk without restarting the service."""
+    """Hot-reload the model from disk without restarting the service.
+
+    Protected with X-Internal-Token — reloading re-reads the canonical
+    model.pkl + model_metadata.json pair, so it must not be reachable from
+    random pages on the LAN.
+    """
     model_manager = request.app.state.model_manager
     try:
         result = model_manager.reload(settings.model_path)
@@ -277,12 +306,16 @@ async def reload_model(request: Request) -> dict:
         raise HTTPException(status_code=500, detail=f"Model reload failed: {e}")
 
 
-@router.post("/model/reload-features")
+@router.post(
+    "/model/reload-features",
+    dependencies=[Depends(require_internal_token)],
+)
 async def reload_features() -> dict:
     """Reload static aggregations and fill values from disk.
 
     Called by the retraining service after a new model is promoted to primary,
     ensuring inference features stay in sync with the latest training statistics.
+    Protected with X-Internal-Token.
     """
     reloaded: list[str] = []
     errors: list[str] = []
@@ -305,8 +338,14 @@ async def reload_features() -> dict:
     return {"status": "reloaded", "reloaded": reloaded, "errors": errors}
 
 
-@router.post("/model/shadow/load")
-async def load_shadow_model(request: Request, path: str = "models/shadow_model.pkl") -> dict:
+@router.post(
+    "/model/shadow/load",
+    dependencies=[Depends(require_internal_token)],
+)
+async def load_shadow_model(
+    request: Request,
+    path: str = Query("models/shadow_model.pkl"),
+) -> dict:
     """Load a shadow/challenger model for A/B comparison."""
     from pathlib import Path
 
@@ -325,19 +364,131 @@ async def load_shadow_model(request: Request, path: str = "models/shadow_model.p
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/model/shadow/promote")
+@router.post(
+    "/model/shadow/promote",
+    dependencies=[Depends(require_internal_token)],
+)
 async def promote_shadow(request: Request) -> dict:
     """Promote shadow model to primary."""
     model_manager = request.app.state.model_manager
     if not model_manager.has_shadow:
         raise HTTPException(status_code=404, detail="No shadow model loaded")
     model_manager.promote_shadow()
-    return {"status": "promoted", "new_primary_path": model_manager._model_path}
+    return {
+        "status": "promoted",
+        "new_primary_path": model_manager._model_path,
+        "runtime_version": model_manager.runtime_version,
+    }
 
 
-@router.delete("/model/shadow")
+@router.delete(
+    "/model/shadow",
+    dependencies=[Depends(require_internal_token)],
+)
 async def remove_shadow(request: Request) -> dict:
     """Remove the loaded shadow model."""
     model_manager = request.app.state.model_manager
     model_manager.remove_shadow()
     return {"status": "shadow_removed"}
+
+
+# ---------------------------------------------------------------------------
+# Dashboard-facing read APIs (proxied through the Next.js BFF)
+# ---------------------------------------------------------------------------
+#
+# These replace the dashboard's direct Postgres queries. The read surface is
+# intentionally minimal — just what the forecast/dispatch/quality pages need
+# — and normalises JSON shapes so the dashboard never has to handle multiple
+# legacy forecast representations.
+
+
+def _normalise_forecast_steps(raw: Any) -> list[dict[str, Any]]:
+    """Convert legacy forecast step shapes to the canonical schema.
+
+    Old writers emitted ``{ts, step, value}``; the current schema is
+    ``{timestamp, horizon_step, predicted_value}``. Normalising here keeps
+    the dashboard ignorant of the legacy variant. Unknown fields are
+    dropped on purpose — the dashboard only cares about those three.
+    """
+    if isinstance(raw, str):
+        try:
+            import json
+
+            raw = json.loads(raw)
+        except Exception:
+            return []
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for step in raw:
+        if not isinstance(step, dict):
+            continue
+        timestamp = step.get("timestamp") or step.get("ts") or ""
+        horizon_step = step.get("horizon_step") or step.get("step") or 0
+        predicted = step.get("predicted_value")
+        if predicted is None:
+            predicted = step.get("value", 0.0)
+        out.append(
+            {
+                "horizon_step": int(horizon_step or 0),
+                "timestamp": str(timestamp),
+                "predicted_value": float(predicted or 0.0),
+            }
+        )
+    return out
+
+
+@router_v1.get("/forecasts")
+async def list_forecasts(
+    warehouse_id: int = Query(..., ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+) -> dict[str, Any]:
+    """List recent forecasts for a warehouse.
+
+    Response envelope is ``{"forecasts": [...]}`` so future metadata
+    fields (pagination cursor, model_version breakdown) can ride along
+    without breaking existing clients.
+    """
+    rows = await postgres.list_forecasts_for_warehouse(
+        warehouse_id=warehouse_id, limit=limit
+    )
+    forecasts = [
+        {
+            "id": row["id"],
+            "route_id": row["route_id"],
+            "warehouse_id": row["warehouse_id"],
+            "anchor_ts": row["anchor_ts"].isoformat()
+            if row["anchor_ts"] is not None
+            else None,
+            "forecasts": _normalise_forecast_steps(row["forecasts"]),
+            "model_version": row["model_version"],
+            "created_at": row["created_at"].isoformat()
+            if row["created_at"] is not None
+            else None,
+        }
+        for row in rows
+    ]
+    return {"forecasts": forecasts}
+
+
+@router_v1.get("/routes/{route_id}/status-history")
+async def list_status_history(
+    route_id: int,
+    limit: int = Query(200, ge=1, le=1000),
+) -> dict[str, Any]:
+    """Return the last ``limit`` status observations for a route.
+
+    Rows are returned ascending by timestamp so the dashboard chart can
+    render the series left-to-right without a client-side reverse.
+    """
+    rows = await postgres.list_route_status_history(
+        route_id=route_id, limit=limit
+    )
+    history = [
+        {
+            k: (v.isoformat() if isinstance(v, datetime) else v)
+            for k, v in row.items()
+        }
+        for row in rows
+    ]
+    return {"history": history}

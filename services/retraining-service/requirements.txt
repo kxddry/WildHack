@@ -9,6 +9,8 @@ pydantic-settings==2.9.1
 lightgbm==4.6.0
 pandas==2.2.3
 numpy==2.2.6
+pyarrow==17.0.0
 scikit-learn==1.6.1
 joblib==1.5.0
 prometheus-fastapi-instrumentator==7.0.2
+python-multipart==0.0.20

@@ -9,6 +9,9 @@ import {
   Truck,
   Activity,
   Boxes,
+  Upload,
+  Cpu,
+  Workflow,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -17,6 +20,9 @@ const links = [
   { href: "/forecasts", label: "Forecasts", icon: TrendingUp },
   { href: "/dispatch", label: "Dispatch", icon: Truck },
   { href: "/quality", label: "Quality", icon: Activity },
+  { href: "/setup", label: "Data", icon: Upload },
+  { href: "/models", label: "Models", icon: Cpu },
+  { href: "/operations", label: "Operations", icon: Workflow },
   { href: "/readiness", label: "Readiness", icon: CheckCircle },
 ];
 

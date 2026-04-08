@@ -125,7 +125,7 @@ export default function QualityPage() {
   useEffect(() => {
     Promise.all([
       fetch("/api/model/info").then((r) => r.json()),
-      fetch("/api/db/warehouses").then((r) => r.json()),
+      fetch("/api/warehouses").then((r) => r.json()),
     ])
       .then(([modelData, warehouseData]) => {
         if (modelData.error) throw new Error(modelData.error);
@@ -141,7 +141,7 @@ export default function QualityPage() {
 
   useEffect(() => {
     if (!selectedWarehouse) return;
-    fetch(`/api/db/forecasts?warehouse_id=${selectedWarehouse}&limit=200`)
+    fetch(`/api/forecasts?warehouse_id=${selectedWarehouse}&limit=200`)
       .then((r) => r.json())
       .then((data) => {
         if (data.error) throw new Error(data.error);
@@ -164,7 +164,7 @@ export default function QualityPage() {
     if (!selectedRoute) return;
     setLoadingHistory(true);
     setError(null);
-    fetch(`/api/db/status-history?route_id=${selectedRoute}`)
+    fetch(`/api/status-history?route_id=${selectedRoute}`)
       .then((r) => r.json())
       .then((data) => {
         if (data.error) throw new Error(data.error);

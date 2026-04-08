@@ -403,7 +403,8 @@ lsof -i :5432
 
 ```bash
 # Внеочередной запуск pipeline через scheduler
-curl -X POST http://localhost:8002/pipeline/trigger
+curl -X POST http://localhost:8002/pipeline/trigger \
+  -H "X-Internal-Token: $INTERNAL_API_TOKEN"
 
 # Или ручной seed (если есть скрипты)
 python scripts/seed_status_history.py

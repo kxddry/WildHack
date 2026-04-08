@@ -39,7 +39,7 @@ export default function OverviewPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/db/warehouses")
+    fetch("/api/warehouses")
       .then((r) => r.json())
       .then((data) => {
         if (data.error) throw new Error(data.error);

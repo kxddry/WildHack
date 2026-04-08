@@ -104,11 +104,14 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Internal service — the dashboard BFF never calls the scheduler directly.
+# Leave the origin list empty; the protected control routes remain reachable
+# from in-cluster callers that supply X-Internal-Token.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=[],
+    allow_methods=[],
+    allow_headers=[],
 )
 
 app.include_router(router)

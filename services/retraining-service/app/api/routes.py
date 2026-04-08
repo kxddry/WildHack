@@ -6,17 +6,41 @@ import time
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
+from fastapi.responses import Response
 
+from app.core.orchestration import PromotionPolicy, run_retrain_cycle
+from app.core.team_track import (
+    evaluate_team_track,
+    read_template_upload,
+    render_submission_csv,
+)
 from app.storage import postgres as db
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+# Dashboard-facing read API mounted separately at /api/v1 so it never
+# accidentally collides with the legacy /retrain/... surface.
+router_v1 = APIRouter()
 
 # In-memory store for the last retrain result (reset on restart)
 _last_retrain_result: dict[str, Any] = {}
+# Lock is shared between /retrain and /upload-dataset since both cycle the
+# same ModelTrainer + ModelRegistry instances and a concurrent retrain from
+# either entrypoint would race on the on-disk artifacts.
 _retrain_lock = asyncio.Lock()
+
+
+def get_retrain_lock() -> asyncio.Lock:
+    """Accessor so upload.py can reuse the same singleton lock."""
+    return _retrain_lock
+
+
+def record_last_retrain_result(result: dict[str, Any]) -> None:
+    """Allow other modules (upload.py) to update the /retrain/status cache."""
+    global _last_retrain_result
+    _last_retrain_result = result
 
 
 def _get_trainer(request: Request):
@@ -27,6 +51,21 @@ def _get_trainer(request: Request):
 def _get_registry(request: Request):
     """Retrieve ModelRegistry from app state."""
     return request.app.state.registry
+
+
+def _model_evaluation_available(model: dict[str, Any]) -> bool:
+    config = model.get("config_json") or {}
+    return bool(config.get("evaluation_ready"))
+
+
+def _normalise_model_entry(model: dict[str, Any], champion_version: str | None) -> dict[str, Any]:
+    config = model.get("config_json") or {}
+    return {
+        **model,
+        "config_json": config,
+        "is_champion": model.get("model_version") == champion_version,
+        "evaluation_available": bool(config.get("evaluation_ready")),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -55,12 +94,14 @@ async def health(request: Request) -> dict:
 
 @router.post("/retrain")
 async def trigger_retrain(request: Request) -> dict:
-    """Trigger a full retrain cycle.
+    """Trigger a full retrain cycle using the shadow_if_better policy.
 
-    Flow: fetch data -> build features -> train -> evaluate ->
-          compare with champion -> register -> (optionally) promote.
-    Training is CPU-bound and runs in a thread pool to avoid blocking
-    the event loop.
+    Flow is orchestrated by ``app.core.orchestration.run_retrain_cycle``:
+    fetch → build → train → evaluate → compare with champion → register
+    → shadow-load if challenger is better.
+
+    Training is CPU-bound and runs in a thread pool inside the orchestration
+    helper to avoid blocking the event loop.
     """
     if _retrain_lock.locked():
         raise HTTPException(status_code=409, detail="Retrain already in progress")
@@ -70,126 +111,17 @@ async def trigger_retrain(request: Request) -> dict:
 
         trainer = _get_trainer(request)
         registry = _get_registry(request)
-
-        version = f"v{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
         started_at = datetime.utcnow().isoformat()
 
         try:
-            from app.config import settings
-
-            # Run CPU-bound training steps in a thread pool
-            loop = asyncio.get_running_loop()
-
-            logger.info("Retrain started — version %s", version)
-
-            # 1. Fetch training data (sync, runs in thread)
-            raw_df = await loop.run_in_executor(
-                None, trainer.fetch_training_data, settings.training_window_days
+            outcome = await run_retrain_cycle(
+                trainer,
+                registry,
+                policy=PromotionPolicy.SHADOW_IF_BETTER,
             )
-
-            # 2. Build features (sync, runs in thread)
-            features_df = await loop.run_in_executor(None, trainer.build_features, raw_df)
-
-            # 3. Train model (sync, runs in thread)
-            model, metrics = await loop.run_in_executor(
-                None, trainer.train_model, features_df
-            )
-
-            # 4. Save model to disk (sync, runs in thread)
-            model_path = await loop.run_in_executor(
-                None, trainer.save_model, model, version, metrics
-            )
-
-            # 4b. Recompute static aggregations and fill values from fresh training data
-            try:
-                await loop.run_in_executor(
-                    None, trainer.save_static_aggs, raw_df, features_df, settings.model_output_dir
-                )
-            except Exception:
-                logger.exception("Failed to save static aggs — training continues without update")
-
-            # 5. Get current champion for comparison
-            champion = await registry.get_champion()
-            challenger_score = metrics["combined_score"]
-            is_better = True  # promote by default when no champion exists
-
-            if champion is not None:
-                champion_score = champion.get("cv_score", float("inf"))
-                is_better = trainer.compare_champion_challenger(champion_score, challenger_score)
-                logger.info(
-                    "Champion score=%.4f, challenger score=%.4f, is_better=%s",
-                    champion_score, challenger_score, is_better,
-                )
-
-            # 6. Register challenger in model_metadata
-            config = {
-                "training_window_days": settings.training_window_days,
-                "n_estimators": settings.n_estimators,
-                "learning_rate": settings.learning_rate,
-                "num_leaves": settings.num_leaves,
-                "max_depth": settings.max_depth,
-                "min_child_samples": settings.min_child_samples,
-                "best_iteration": metrics.get("best_iteration"),
-                "wape": metrics.get("wape"),
-                "rbias": metrics.get("rbias"),
-            }
-            await registry.register_model(
-                version=version,
-                model_path=model_path,
-                cv_score=challenger_score,
-                feature_count=metrics.get("feature_count", 0),
-                config=config,
-            )
-
-            # 7. Promote challenger to shadow for A/B testing if better than champion
-            promotion_status = "skipped"
-            if is_better:
-                try:
-                    await registry.promote_to_shadow(model_path)
-                    promotion_status = "shadow_loaded"
-                    logger.info("Challenger %s loaded as shadow model", version)
-                except Exception:
-                    logger.exception(
-                        "Failed to load challenger %s as shadow — model registered but not promoted",
-                        version,
-                    )
-                    promotion_status = "promotion_failed"
-
-            result: dict[str, Any] = {
-                "version": version,
-                "model_path": model_path,
-                "metrics": metrics,
-                "is_better_than_champion": is_better,
-                "promotion_status": promotion_status,
-                "started_at": started_at,
-                "finished_at": datetime.utcnow().isoformat(),
-                "status": "success",
-            }
-            _last_retrain_result = result
-
-            # Persist retrain history
-            try:
-                promoted = promotion_status == "shadow_loaded"
-                await db.save_retrain_history(
-                    started_at=started_at,
-                    completed_at=result["finished_at"],
-                    status="success",
-                    training_rows=metrics.get("train_rows"),
-                    champion_score=champion.get("cv_score") if champion else None,
-                    challenger_score=challenger_score,
-                    promoted=promoted,
-                    new_model_version=version,
-                    details=result,
-                )
-            except Exception:
-                logger.exception("Failed to persist retrain history")
-
-            return result
-
         except ValueError as exc:
             finished_at = datetime.utcnow().isoformat()
             err: dict[str, Any] = {
-                "version": version,
                 "status": "failed",
                 "error": str(exc),
                 "started_at": started_at,
@@ -205,17 +137,16 @@ async def trigger_retrain(request: Request) -> dict:
                     champion_score=None,
                     challenger_score=None,
                     promoted=False,
-                    new_model_version=version,
+                    new_model_version=None,
                     details=err,
                 )
             except Exception:
                 logger.exception("Failed to persist retrain history (failed run)")
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except Exception as exc:
-            logger.exception("Retrain failed for version %s", version)
+            logger.exception("Retrain failed")
             finished_at = datetime.utcnow().isoformat()
             err = {
-                "version": version,
                 "status": "failed",
                 "error": str(exc),
                 "started_at": started_at,
@@ -231,12 +162,18 @@ async def trigger_retrain(request: Request) -> dict:
                     champion_score=None,
                     challenger_score=None,
                     promoted=False,
-                    new_model_version=version,
+                    new_model_version=None,
                     details=err,
                 )
             except Exception:
                 logger.exception("Failed to persist retrain history (failed run)")
-            raise HTTPException(status_code=500, detail="Retrain pipeline failed") from exc
+            raise HTTPException(
+                status_code=500, detail="Retrain pipeline failed"
+            ) from exc
+
+        result = outcome.to_dict()
+        _last_retrain_result = result
+        return result
 
 
 @router.get("/retrain/status")
@@ -254,7 +191,13 @@ async def retrain_status() -> dict:
 async def list_models(request: Request) -> list[dict]:
     """List all registered model versions ordered by creation time."""
     registry = _get_registry(request)
-    return await registry.get_all_versions()
+    models = await registry.get_all_versions()
+    champion = await registry.get_champion()
+    champion_version = champion.get("model_version") if champion else None
+    return [
+        _normalise_model_entry(model, champion_version)
+        for model in models
+    ]
 
 
 @router.get("/models/champion")
@@ -264,7 +207,7 @@ async def get_champion(request: Request) -> dict:
     champion = await registry.get_champion()
     if champion is None:
         raise HTTPException(status_code=404, detail="No champion model registered yet")
-    return champion
+    return _normalise_model_entry(champion, champion.get("model_version"))
 
 
 @router.post("/models/{version}/promote")
@@ -320,3 +263,71 @@ async def load_shadow(version: str, request: Request) -> dict:
         raise HTTPException(
             status_code=500, detail=f"Shadow load failed: {exc}"
         ) from exc
+
+
+@router.post("/team-track/preview")
+async def team_track_preview(
+    file: UploadFile = File(...),
+    model_version: str | None = Query(default=None),
+) -> dict[str, Any]:
+    """Validate a Team Track template and return a JSON preview."""
+    template_df = await read_template_upload(file)
+    evaluation = await evaluate_team_track(template_df, model_version)
+    return evaluation.to_preview_response()
+
+
+@router.post("/team-track/submission")
+async def team_track_submission(
+    file: UploadFile = File(...),
+    model_version: str | None = Query(default=None),
+) -> Response:
+    """Validate a Team Track template and return the submission CSV."""
+    template_df = await read_template_upload(file)
+    evaluation = await evaluate_team_track(template_df, model_version)
+    csv_body = render_submission_csv(evaluation.submission_rows)
+    suffix = (
+        evaluation.model["resolved_version"]
+        if evaluation.model.get("resolved_version")
+        else "active-primary"
+    )
+    return Response(
+        content=csv_body,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="submission-{suffix}.csv"'
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Dashboard-facing read APIs (mounted under /api/v1 by main.py)
+# ---------------------------------------------------------------------------
+
+
+@router_v1.get("/readiness/table-counts")
+async def readiness_table_counts() -> dict[str, Any]:
+    """Return live row counts for the tables the Readiness page tracks.
+
+    Thin wrapper around ``db.get_table_counts`` — the read model already
+    returns the exact shape the dashboard needs, so this endpoint just
+    surfaces it through the BFF proxy without any reshaping.
+    """
+    counts = await db.get_table_counts()
+    return counts
+
+
+@router_v1.get("/models/registry")
+async def registry_summary(request: Request) -> dict[str, Any]:
+    """Return model registry entries plus champion and last retrain status."""
+    registry = _get_registry(request)
+    champion = await registry.get_champion()
+    champion_version = champion.get("model_version") if champion else None
+    models = await registry.get_all_versions()
+    return {
+        "models": [
+            _normalise_model_entry(model, champion_version)
+            for model in models
+        ],
+        "champion_version": champion_version,
+        "last_retrain": _last_retrain_result,
+    }

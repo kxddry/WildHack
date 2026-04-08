@@ -186,9 +186,9 @@ trucks = max(min_trucks, ceil(total_containers * (1 + buffer_pct) / truck_capaci
 | Метод | Эндпоинт | Назначение |
 |-------|----------|-----------|
 | GET | `/pipeline/status` | Текущий статус оркестратора и quality checker |
-| POST | `/pipeline/trigger` | Ручной запуск цикла predict + dispatch |
+| POST | `/pipeline/trigger` | Ручной запуск цикла predict + dispatch (`X-Internal-Token`) |
 | GET | `/pipeline/history?limit=` | Аудит-лог запусков из `pipeline_runs` |
-| POST | `/quality/trigger` | Внеочередной расчёт качества |
+| POST | `/quality/trigger` | Внеочередной расчёт качества (`X-Internal-Token`) |
 | GET | `/quality/alerts` | Активные алерты по дрейфу качества |
 | GET | `/health` | Health-check |
 

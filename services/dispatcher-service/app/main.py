@@ -33,11 +33,13 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Internal service — the dashboard BFF proxy owns all cross-origin traffic.
+# Leaving the origin list empty blocks stray third-party calls outright.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=[],
+    allow_methods=[],
+    allow_headers=[],
 )
 
 

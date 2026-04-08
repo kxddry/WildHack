@@ -213,3 +213,73 @@ async def check_connection() -> bool:
     except Exception:
         logger.exception("Database connection check failed")
         return False
+
+
+# ---------------------------------------------------------------------------
+# Dashboard-facing read models (consumed via BFF proxy; no direct browser)
+# ---------------------------------------------------------------------------
+#
+# These replace the dashboard's direct `pg.Pool` queries against `forecasts`
+# and `route_status_history`. The dashboard layer no longer touches Postgres;
+# it proxies to these endpoints instead.
+
+
+async def list_forecasts_for_warehouse(
+    warehouse_id: int, limit: int
+) -> list[dict[str, Any]]:
+    """Return the most recent forecast rows for a warehouse.
+
+    Steps inside ``forecasts`` are normalised to the canonical shape
+    ``{horizon_step, timestamp, predicted_value}`` so the frontend doesn't
+    need to handle two legacy formats. ``anchor_ts`` is serialised to an
+    ISO string in the calling API layer.
+    """
+    engine = _get_engine()
+    async with engine.connect() as conn:
+        result = await conn.execute(
+            text(
+                """
+                SELECT id, route_id, warehouse_id, anchor_ts,
+                       forecasts, model_version, created_at
+                FROM forecasts
+                WHERE warehouse_id = :warehouse_id
+                ORDER BY created_at DESC
+                LIMIT :limit
+                """
+            ),
+            {"warehouse_id": warehouse_id, "limit": limit},
+        )
+        rows = [dict(r._mapping) for r in result.fetchall()]
+    return rows
+
+
+async def list_route_status_history(
+    route_id: int, limit: int
+) -> list[dict[str, Any]]:
+    """Return the most recent ``limit`` history rows for a route.
+
+    Ordered ascending by timestamp to match the chart component's
+    expectation (oldest → newest for the x-axis). The ``LIMIT`` is applied
+    inside a subquery that orders DESC so we keep only the N newest rows
+    regardless of the route's total history length.
+    """
+    engine = _get_engine()
+    async with engine.connect() as conn:
+        result = await conn.execute(
+            text(
+                """
+                SELECT *
+                FROM (
+                    SELECT *
+                    FROM route_status_history
+                    WHERE route_id = :route_id
+                    ORDER BY timestamp DESC
+                    LIMIT :limit
+                ) recent
+                ORDER BY timestamp ASC
+                """
+            ),
+            {"route_id": route_id, "limit": limit},
+        )
+        rows = [dict(r._mapping) for r in result.fetchall()]
+    return rows

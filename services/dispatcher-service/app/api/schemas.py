@@ -37,6 +37,10 @@ class ScheduleResponse(BaseModel):
 
 class WarehouseItem(BaseModel):
     warehouse_id: int
+    # Human-readable warehouse label, optional because legacy seed data may
+    # leave it NULL. The dashboard falls back to "Warehouse {id}" client-side
+    # when this is missing.
+    name: str | None = None
     route_count: int
     latest_forecast_at: datetime | None
     upcoming_trucks: int
@@ -44,6 +48,35 @@ class WarehouseItem(BaseModel):
 
 class WarehouseListResponse(BaseModel):
     warehouses: list[WarehouseItem]
+    total: int
+
+
+class TransportRequestRecent(BaseModel):
+    """Row shape for ``GET /api/v1/transport-requests/recent``.
+
+    Mirrors the dispatch table on the dashboard — raw slot fields plus
+    fulfilment counters. Kept separate from ``TransportRequestPRD`` so the
+    PRD contract can evolve independently of the dashboard list view.
+    """
+
+    id: int
+    warehouse_id: int
+    time_slot_start: datetime
+    time_slot_end: datetime
+    total_containers: float
+    truck_capacity: int
+    buffer_pct: float
+    trucks_needed: int
+    calculation: str | None = None
+    status: str
+    actual_vehicles: int | None = None
+    actual_units: float | None = None
+    created_at: datetime
+    updated_at: datetime | None = None
+
+
+class TransportRequestRecentListResponse(BaseModel):
+    items: list[TransportRequestRecent]
     total: int
 
 

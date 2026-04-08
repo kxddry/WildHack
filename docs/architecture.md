@@ -164,9 +164,9 @@ scheduler-service/
 
 **HTTP API** (для оператора и UI):
 - `GET /pipeline/status` — снапшот состояния оркестратора и quality checker
-- `POST /pipeline/trigger` — внеочередной запуск цикла
+- `POST /pipeline/trigger` — внеочередной запуск цикла (`X-Internal-Token`)
 - `GET /pipeline/history?limit=` — аудит-лог из `pipeline_runs`
-- `POST /quality/trigger` / `GET /quality/alerts`
+- `POST /quality/trigger` (`X-Internal-Token`) / `GET /quality/alerts`
 
 ### 4. retraining-service (FastAPI + LightGBM, порт 8003)
 

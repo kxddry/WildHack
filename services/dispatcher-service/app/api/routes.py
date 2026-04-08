@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import timedelta
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -27,14 +28,29 @@ _start_time = time.monotonic()
 @router.post("/dispatch", response_model=DispatchResponse)
 async def create_dispatch(request: DispatchRequest) -> DispatchResponse:
     if request.forecasts is not None:
-        forecasts = [
-            {
-                "time_slot_start": f.timestamp,
-                "time_slot_end": f.timestamp,
-                "total_containers": f.total_containers,
-            }
-            for f in request.forecasts
-        ]
+        # Caller passed explicit forecast steps. Build half-open slots
+        # [ts, ts + step_interval) and drop any zero-length or negative
+        # spans up-front so the DB never receives them (would violate the
+        # dedup unique index anyway).
+        slot_width = timedelta(minutes=int(settings.step_interval_minutes))
+        forecasts = []
+        for f in request.forecasts:
+            slot_start = f.timestamp
+            slot_end = slot_start + slot_width
+            if slot_end <= slot_start:
+                logger.warning(
+                    "Skipping zero/negative-length slot at %s for warehouse %s",
+                    slot_start,
+                    request.warehouse_id,
+                )
+                continue
+            forecasts.append(
+                {
+                    "time_slot_start": slot_start,
+                    "time_slot_end": slot_end,
+                    "total_containers": f.total_containers,
+                }
+            )
     elif request.time_range_start is not None and request.time_range_end is not None:
         forecasts = await postgres.get_recent_forecasts(
             warehouse_id=request.warehouse_id,
@@ -82,6 +98,7 @@ async def list_warehouses() -> WarehouseListResponse:
     warehouses = [
         WarehouseItem(
             warehouse_id=row["warehouse_id"],
+            name=row.get("name"),
             route_count=row["route_count"],
             latest_forecast_at=row.get("latest_forecast_at"),
             upcoming_trucks=row["upcoming_trucks"],

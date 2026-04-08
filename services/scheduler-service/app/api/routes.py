@@ -3,7 +3,9 @@
 import logging
 import time
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
+
+from app.api.security import require_internal_token
 
 logger = logging.getLogger(__name__)
 
@@ -34,16 +36,16 @@ async def pipeline_status(request: Request) -> dict:
     }
 
 
-@router.post("/pipeline/trigger")
+@router.post("/pipeline/trigger", dependencies=[Depends(require_internal_token)])
 async def trigger_pipeline(request: Request) -> dict:
-    """Manually trigger a prediction+dispatch cycle."""
+    """Manually trigger a prediction+dispatch cycle (internal-token protected)."""
     orchestrator = request.app.state.orchestrator
     db = request.app.state.db
     result = await orchestrator.run_prediction_cycle(from_db=db)
     return result
 
 
-@router.post("/quality/trigger")
+@router.post("/quality/trigger", dependencies=[Depends(require_internal_token)])
 async def trigger_quality_check(request: Request) -> dict:
     """Manually trigger a quality evaluation."""
     quality = request.app.state.quality_checker

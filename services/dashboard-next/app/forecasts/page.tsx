@@ -106,7 +106,7 @@ export default function ForecastsPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/db/warehouses")
+    fetch("/api/warehouses")
       .then((r) => r.json())
       .then((data) => {
         if (data.error) throw new Error(data.error);
@@ -122,7 +122,7 @@ export default function ForecastsPage() {
     if (!selectedWarehouse) return;
     setLoadingForecasts(true);
     setError(null);
-    fetch(`/api/db/forecasts?warehouse_id=${selectedWarehouse}`)
+    fetch(`/api/forecasts?warehouse_id=${selectedWarehouse}`)
       .then((r) => r.json())
       .then((data) => {
         if (data.error) throw new Error(data.error);

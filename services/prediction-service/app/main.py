@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator
 
-from app.api.routes import feature_engine, router
+from app.api.routes import feature_engine, router, router_v1
 from app.config import settings
 from app.core.model import ModelManager
 from app.storage.postgres import close_engine, create_engine_pool
@@ -101,16 +101,23 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Internal service — browsers never call this directly. Dashboard BFF proxy
+# owns the only cross-origin surface. Leave the list empty so stray
+# third-party origins are rejected.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=[],
+    allow_methods=[],
+    allow_headers=[],
 )
 
 app.include_router(router)
 # Versioned API surface required by PRD §6 — exposed in addition to the
 # legacy un-prefixed paths for backward compatibility with existing clients.
 app.include_router(router, prefix="/api/v1")
+# Dashboard-facing read APIs only live under /api/v1 — no legacy un-prefixed
+# mirror since these endpoints are new and the dashboard calls them through
+# the Next.js BFF proxy with a stable /api/v1/... path.
+app.include_router(router_v1, prefix="/api/v1")
 
 Instrumentator().instrument(app).expose(app)

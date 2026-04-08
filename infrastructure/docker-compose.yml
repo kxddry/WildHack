@@ -118,8 +118,15 @@ services:
       MODEL_PATH: /app/models/model.pkl
       STATIC_AGGS_PATH: /app/models/static_aggs.json
       FILL_VALUES_PATH: /app/models/fill_values.json
+      # Shared internal secret — required on /model/reload, /model/reload-features,
+      # /model/shadow/*. No default: missing env → the service boots and every
+      # protected route fails closed with 503 until ops supplies the value.
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
     ports:
-      - "${PREDICTION_PORT:-8000}:8000"
+      # Bind to loopback only — inter-container traffic uses the compose
+      # network and does not require a LAN-visible port. Container still
+      # listens on 0.0.0.0 so sibling services can reach it.
+      - "127.0.0.1:${PREDICTION_PORT:-8000}:8000"
     volumes:
       # Read-only mount: prediction-service consumes artifacts produced by
       # retraining-service. Splitting :ro from :rw makes the producer/
@@ -153,8 +160,12 @@ services:
       ADAPTIVE_BUFFER: ${ADAPTIVE_BUFFER:-false}
       MIN_BUFFER_PCT: ${MIN_BUFFER_PCT:-0.05}
       MAX_BUFFER_PCT: ${MAX_BUFFER_PCT:-0.25}
+      # Half-open slot width must match prediction-service's step interval;
+      # tracked separately so the two services can be tuned during migration.
+      STEP_INTERVAL_MINUTES: ${STEP_INTERVAL_MINUTES:-30}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
     ports:
-      - "${DISPATCHER_PORT:-8001}:8001"
+      - "127.0.0.1:${DISPATCHER_PORT:-8001}:8001"
     depends_on:
       postgres:
         condition: service_healthy
@@ -175,10 +186,21 @@ services:
     env_file:
       - ../.env
     environment:
+      # Dashboard is a Next.js BFF — every Postgres read is proxied through
+      # a service-owned API. No DATABASE_URL is injected here; the pg
+      # runtime dependency has been dropped from package.json.
       PREDICTION_SERVICE_URL: http://prediction-service:8000
       DISPATCHER_SERVICE_URL: http://dispatcher-service:8001
-      DATABASE_URL: postgresql://${POSTGRES_USER:-wildhack}:${POSTGRES_PASSWORD:-wildhack_dev}@postgres:5432/${POSTGRES_DB:-wildhack}
+      RETRAINING_SERVICE_URL: http://retraining-service:8003
+      SCHEDULER_SERVICE_URL: http://scheduler-service:8002
+      # Shared secret injected by the dashboard's /api/data/upload proxy as
+      # the X-Ingest-Token header. No default — fails closed in every
+      # environment until ops sets the value in .env.
+      DATA_INGEST_TOKEN: ${DATA_INGEST_TOKEN}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
     ports:
+      # Dashboard is the only externally-reachable surface; bind to all
+      # interfaces so operators can browse from the LAN.
       - "${DASHBOARD_PORT:-4000}:3000"
     depends_on:
       postgres:
@@ -188,6 +210,10 @@ services:
       prediction-service:
         condition: service_healthy
       dispatcher-service:
+        condition: service_healthy
+      retraining-service:
+        condition: service_healthy
+      scheduler-service:
         condition: service_healthy
     healthcheck:
       <<: *healthcheck-cadence
@@ -212,8 +238,12 @@ services:
       RETRAINING_SERVICE_URL: http://retraining-service:8003
       PREDICTION_INTERVAL_MINUTES: ${PREDICTION_INTERVAL_MINUTES:-30}
       QUALITY_CHECK_INTERVAL_MINUTES: ${QUALITY_CHECK_INTERVAL_MINUTES:-60}
+      # Required on /pipeline/trigger and when scheduler calls prediction
+      # service control routes. No default — fails closed if ops hasn't
+      # rotated the shared secret.
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
     ports:
-      - "${SCHEDULER_PORT:-8002}:8002"
+      - "127.0.0.1:${SCHEDULER_PORT:-8002}:8002"
     depends_on:
       postgres:
         condition: service_healthy
@@ -239,10 +269,19 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-wildhack}:${POSTGRES_PASSWORD:-wildhack_dev}@postgres:5432/${POSTGRES_DB:-wildhack}
       SYNC_DATABASE_URL: postgresql://${POSTGRES_USER:-wildhack}:${POSTGRES_PASSWORD:-wildhack_dev}@postgres:5432/${POSTGRES_DB:-wildhack}
       PREDICTION_SERVICE_URL: http://prediction-service:8000
+      SCHEDULER_SERVICE_URL: http://scheduler-service:8002
       MODEL_OUTPUT_DIR: /app/models
       TRAINING_WINDOW_DAYS: ${TRAINING_WINDOW_DAYS:-7}
+      UPLOAD_RETENTION_DAYS: ${UPLOAD_RETENTION_DAYS:-7}
+      # Shared secret for POST /upload-dataset. MUST match the dashboard's
+      # value (both sides read DATA_INGEST_TOKEN from the same .env). No
+      # default: fails closed if the env is empty in any environment.
+      DATA_INGEST_TOKEN: ${DATA_INGEST_TOKEN}
+      # Shared internal secret — required when retraining-service calls
+      # prediction-service /model/shadow/* and scheduler /pipeline/trigger.
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
     ports:
-      - "${RETRAINING_PORT:-8003}:8003"
+      - "127.0.0.1:${RETRAINING_PORT:-8003}:8003"
     volumes:
       # Writable: retraining-service is the producer of artifacts under
       # models/. The prediction-service mounts the same path read-only.
@@ -264,22 +303,36 @@ services:
   prometheus:
     image: prom/prometheus:v2.51.0
     ports:
-      - "${PROMETHEUS_PORT:-9090}:9090"
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     depends_on:
+      # Scrape targets match the prometheus.yml job list: every Python
+      # service that exports /metrics must be up before Prometheus starts
+      # or the first scrape cycle wastes effort on "connection refused"s.
       prediction-service:
         condition: service_healthy
       dispatcher-service:
         condition: service_healthy
+      scheduler-service:
+        condition: service_healthy
+      retraining-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9090/-/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
     restart: unless-stopped
 
   grafana:
     image: grafana/grafana:10.4.0
     ports:
       # Default 3001 to dodge collisions with locally-running Next.js dev
-      # servers on 3000.
-      - "${GRAFANA_PORT:-3001}:3000"
+      # servers on 3000. Bound to loopback — Grafana is an operator tool,
+      # not a dashboard for end users.
+      - "127.0.0.1:${GRAFANA_PORT:-3001}:3000"
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD:-admin}
       # Anonymous access is OFF by default. Set GF_AUTH_ANONYMOUS_ENABLED=true
@@ -291,7 +344,14 @@ services:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
     depends_on:
-      - prometheus
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
     restart: unless-stopped
 
 volumes:

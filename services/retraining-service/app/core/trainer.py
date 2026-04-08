@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Model retraining engine.
 
 Fetches fresh data, builds features matching InferenceFeatureEngine,
@@ -17,9 +19,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import lightgbm as lgb
 import numpy as np
 import pandas as pd
+
+try:
+    import lightgbm as lgb
+except ImportError:  # pragma: no cover - exercised only in host-side lightweight tests
+    lgb = None  # type: ignore[assignment]
 
 from app.config import settings
 from app.core.baseline import NaiveSeasonalBaseline
@@ -206,13 +212,21 @@ class ModelTrainer:
     # 1. Fetch training data
     # ------------------------------------------------------------------
 
-    def fetch_training_data(self, window_days: int) -> pd.DataFrame:
+    def fetch_training_data(
+        self,
+        window_days: int,
+        reference_ts: datetime | None = None,
+    ) -> pd.DataFrame:
         """Fetch route_status_history for the last `window_days` days.
 
         Uses a synchronous SQLAlchemy engine so pandas.read_sql works without
         needing a running asyncio event loop (training is CPU-bound).
         """
-        df = db.fetch_training_data(settings.sync_database_url, window_days)
+        df = db.fetch_training_data(
+            settings.sync_database_url,
+            window_days,
+            reference_ts=reference_ts,
+        )
         if df.empty:
             raise ValueError(
                 f"No training data available for the last {window_days} days"
@@ -296,6 +310,9 @@ class ModelTrainer:
 
         Returns the trained Booster and a metrics dict.
         """
+        if lgb is None:
+            raise RuntimeError("lightgbm is required to train models")
+
         # Identify columns to drop (non-feature columns)
         drop_cols = {
             "timestamp", "route_id", "office_from_id",
@@ -524,7 +541,8 @@ class ModelTrainer:
         raw_df: pd.DataFrame,
         features_df: pd.DataFrame,
         output_dir: str,
-    ) -> None:
+        version: str,
+    ) -> dict[str, str]:
         """Compute and save static aggregations and fill values from training data.
 
         These artifacts are used by InferenceFeatureEngine to stay in sync with
@@ -582,11 +600,16 @@ class ModelTrainer:
             agg_df = agg_df.reset_index().fillna(0.0)
             static_aggs[key_name] = agg_df.to_dict(orient="records")
 
-        static_aggs_path = output_path / "static_aggs.json"
-        with open(static_aggs_path, "w") as fh:
-            json.dump(static_aggs, fh)
+        versioned_static_aggs_path = output_path / f"{version}_static_aggs.json"
+        static_aggs_path = output_path / settings.canonical_static_aggs_filename
+        for path in (versioned_static_aggs_path, static_aggs_path):
+            with open(path, "w") as fh:
+                json.dump(static_aggs, fh)
         logger.info(
-            "Saved %d static aggregation tables to %s", len(static_aggs), static_aggs_path
+            "Saved %d static aggregation tables to %s and %s",
+            len(static_aggs),
+            versioned_static_aggs_path,
+            static_aggs_path,
         )
 
         # Compute fill values: median of numeric features from full feature matrix
@@ -601,9 +624,21 @@ class ModelTrainer:
             if not pd.isna(median_val):
                 fill_values[col] = float(median_val)
 
-        fill_values_path = output_path / "fill_values.json"
-        with open(fill_values_path, "w") as fh:
-            json.dump(fill_values, fh)
+        versioned_fill_values_path = output_path / f"{version}_fill_values.json"
+        fill_values_path = output_path / settings.canonical_fill_values_filename
+        for path in (versioned_fill_values_path, fill_values_path):
+            with open(path, "w") as fh:
+                json.dump(fill_values, fh)
         logger.info(
-            "Saved fill values (%d features) to %s", len(fill_values), fill_values_path
+            "Saved fill values (%d features) to %s and %s",
+            len(fill_values),
+            versioned_fill_values_path,
+            fill_values_path,
         )
+
+        return {
+            "static_aggs_path": str(versioned_static_aggs_path),
+            "fill_values_path": str(versioned_fill_values_path),
+            "canonical_static_aggs_path": str(static_aggs_path),
+            "canonical_fill_values_path": str(fill_values_path),
+        }

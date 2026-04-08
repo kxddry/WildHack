@@ -63,6 +63,82 @@ export interface ModelInfo {
   step_interval_minutes: number;
 }
 
+export interface ModelRegistryEntry {
+  id: number;
+  model_version: string;
+  model_path: string;
+  cv_score: number | null;
+  training_date: string | null;
+  feature_count: number;
+  created_at: string;
+  config_json: Record<string, unknown>;
+  is_champion: boolean;
+  evaluation_available: boolean;
+}
+
+export interface ModelRegistrySummary {
+  models: ModelRegistryEntry[];
+  champion_version: string | null;
+  last_retrain: Record<string, unknown>;
+}
+
+export interface PipelineStatus {
+  last_run: string | null;
+  last_status: string;
+  run_count: number;
+}
+
+export interface QualityStatus {
+  last_check: string | null;
+  last_metrics: Record<string, unknown>;
+  active_alerts: number;
+  shadow_win_streak: number;
+  shadow_streak_version: string | null;
+  promote_threshold: number;
+}
+
+export interface PipelineRun {
+  id: number;
+  run_type: string;
+  status: string;
+  started_at: string;
+  completed_at: string | null;
+  details: Record<string, unknown> | string | null;
+}
+
+export interface QualityAlert {
+  type: string;
+  value: number;
+  threshold: number;
+  message: string;
+  timestamp: string;
+}
+
+export interface TeamTrackPreviewRow {
+  id: number;
+  route_id: number;
+  timestamp: string;
+  raw_forecast: number;
+  y_pred: number;
+}
+
+export interface TeamTrackPreviewResponse {
+  row_count: number;
+  route_count: number;
+  preview_count: number;
+  model: {
+    selected_version: string | null;
+    resolved_version: string;
+    source: string;
+    model_path: string;
+    static_aggs_path: string;
+    fill_values_path: string;
+    feature_count: number;
+    evaluation_ready: boolean;
+  };
+  preview: TeamTrackPreviewRow[];
+}
+
 export type CheckStatus = "pass" | "warn" | "fail";
 
 export interface HealthCheck {

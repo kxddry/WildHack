@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
+from app.config import settings
 from app.core.dispatcher import DispatchCalculator
 
 logger = logging.getLogger(__name__)
@@ -116,6 +117,11 @@ async def save_transport_requests(requests: list[dict]) -> dict:
     Returns a small report dict with ``saved``/``skipped`` counters that callers
     (and tests) can inspect.  Existing rows whose ``trucks_needed`` differs from
     the new value by at most ``ANTIFLAP_DELTA_THRESHOLD`` are left untouched.
+
+    Zero-length slots (``time_slot_end <= time_slot_start``) are refused up
+    front — they break the ``UNIQUE (warehouse_id, time_slot_start,
+    time_slot_end)`` contract (two distinct slots collide on the same key)
+    and indicate upstream bugs in the forecast expansion path.
     """
     if not requests:
         return {"saved": 0, "skipped": 0, "total": 0}
@@ -123,14 +129,26 @@ async def save_transport_requests(requests: list[dict]) -> dict:
     # Normalise timestamps once so both the SELECT and the lookup keys agree.
     normalised: list[dict] = []
     for r in requests:
+        start = _strip_tz(r["time_slot_start"])
+        end = _strip_tz(r["time_slot_end"])
+        if end <= start:
+            logger.warning(
+                "Refusing zero/negative-length slot warehouse=%s start=%s end=%s",
+                r.get("warehouse_id"),
+                start,
+                end,
+            )
+            continue
         normalised.append(
             {
                 **r,
                 "warehouse_id": int(r["warehouse_id"]),
-                "time_slot_start": _strip_tz(r["time_slot_start"]),
-                "time_slot_end": _strip_tz(r["time_slot_end"]),
+                "time_slot_start": start,
+                "time_slot_end": end,
             }
         )
+    if not normalised:
+        return {"saved": 0, "skipped": 0, "total": 0}
 
     engine = get_engine()
     async with engine.begin() as conn:
@@ -212,14 +230,54 @@ async def get_recent_forecasts(
     time_start: datetime,
     time_end: datetime,
 ) -> list[dict]:
-    """Fetch forecasts for a warehouse within a time range.
+    """Fetch forecast steps overlapping ``[time_start, time_end)``.
 
-    The forecasts table stores prediction steps as JSONB in the ``forecasts``
-    column.  Each step contains a timestamp and predicted value.  This function
-    extracts those steps and returns them in the ``{time_slot_start,
-    time_slot_end, total_containers}`` format expected by
-    :class:`DispatchCalculator`.
+    The forecasts table stores prediction horizons as a JSONB array on
+    ``forecasts``. Each step has a ``timestamp`` (the horizon step's own
+    clock time, NOT the anchor) and a ``predicted_value``.
+
+    Previous behaviour — filtering by ``anchor_ts BETWEEN start AND end``
+    and emitting zero-length slots where ``time_slot_end == time_slot_start``
+    — was wrong in two distinct ways:
+
+    1. ``anchor_ts`` is the *moment the forecast was computed*, not the
+       *time the forecast is for*. A 5-hour-ahead forecast from 10:00 has
+       anchor_ts=10:00 but covers steps from 10:30 → 15:00. Filtering by
+       anchor_ts drops forecasts whose steps fall inside the requested
+       window but whose anchor is outside it.
+    2. Zero-length slots break ``transport_requests.UNIQUE(warehouse_id,
+       time_slot_start, time_slot_end)`` contracts — downstream consumers
+       can't tell slot A from slot B if they share both endpoints.
+
+    New implementation:
+
+    * Read every forecast row whose anchor is "close enough" to the window
+      (anchor within ``[time_start - forecast_horizon, time_end]``) so we
+      don't over-fetch but still capture rows whose later steps fall inside
+      the window.
+    * Expand each row's JSON steps into (step_ts, value) pairs.
+    * Keep only steps whose timestamp overlaps ``[time_start, time_end)``
+      (half-open).
+    * Build slots with width ``settings.step_interval_minutes``, rejecting
+      any slot whose end is not strictly greater than its start.
     """
+    step_minutes = int(settings.step_interval_minutes)
+    if step_minutes <= 0:
+        raise ValueError(
+            f"step_interval_minutes must be positive, got {step_minutes}"
+        )
+    slot_width = timedelta(minutes=step_minutes)
+
+    # Strip tz for Postgres TIMESTAMP columns (stored as naive).
+    window_start = _strip_tz(time_start)
+    window_end = _strip_tz(time_end)
+
+    # Over-fetch bound: anchor up to ``max_forecast_lookback`` minutes before
+    # the window start so we don't miss rows whose late steps straddle the
+    # requested range. 24h is a conservative cap — the longest forecast
+    # horizon in the system today is 5h.
+    anchor_floor = window_start - timedelta(hours=24)
+
     engine = get_engine()
     async with engine.connect() as conn:
         result = await conn.execute(
@@ -227,14 +285,14 @@ async def get_recent_forecasts(
                 "SELECT route_id, anchor_ts, forecasts "
                 "FROM forecasts "
                 "WHERE warehouse_id = :warehouse_id "
-                "AND anchor_ts >= :time_start "
-                "AND anchor_ts <= :time_end "
+                "AND anchor_ts >= :anchor_floor "
+                "AND anchor_ts <  :window_end "
                 "ORDER BY anchor_ts"
             ),
             {
                 "warehouse_id": warehouse_id,
-                "time_start": time_start.replace(tzinfo=None) if time_start.tzinfo else time_start,
-                "time_end": time_end.replace(tzinfo=None) if time_end.tzinfo else time_end,
+                "anchor_floor": anchor_floor,
+                "window_end": window_end,
             },
         )
         rows = [dict(row._mapping) for row in result.fetchall()]
@@ -244,27 +302,54 @@ async def get_recent_forecasts(
         forecasts_data = row["forecasts"]
         if isinstance(forecasts_data, str):
             forecasts_data = json.loads(forecasts_data)
+        if not isinstance(forecasts_data, list):
+            continue
         for step in forecasts_data:
             ts_raw = step.get("timestamp") or step.get("ts")
-            pv = step.get("predicted_value")
-            value = pv if pv is not None else step.get("value", 0.0)
             if ts_raw is None:
                 continue
+            pv = step.get("predicted_value")
+            value = pv if pv is not None else step.get("value", 0.0)
+
             if isinstance(ts_raw, str):
-                ts_parsed = datetime.fromisoformat(ts_raw)
+                try:
+                    step_ts = datetime.fromisoformat(ts_raw)
+                except ValueError:
+                    continue
             else:
-                ts_parsed = ts_raw
-            if hasattr(ts_parsed, 'tzinfo') and ts_parsed.tzinfo:
-                ts_parsed = ts_parsed.replace(tzinfo=None)
-            items.append({
-                "time_slot_start": ts_parsed,
-                "time_slot_end": ts_parsed,
-                "total_containers": float(value),
-            })
+                step_ts = ts_raw
+            if hasattr(step_ts, "tzinfo") and step_ts.tzinfo:
+                step_ts = step_ts.replace(tzinfo=None)
+
+            # Half-open overlap: include any step whose slot [ts, ts+width)
+            # intersects [window_start, window_end).
+            slot_start = step_ts
+            slot_end = slot_start + slot_width
+            if slot_end <= window_start:
+                continue
+            if slot_start >= window_end:
+                continue
+            if slot_end <= slot_start:
+                # Defensive: zero-length slots must never reach downstream.
+                continue
+
+            items.append(
+                {
+                    "time_slot_start": slot_start,
+                    "time_slot_end": slot_end,
+                    "total_containers": float(value),
+                }
+            )
     return items
 
 
 async def get_all_warehouses() -> list[dict]:
+    """Return all warehouses with dashboard-facing summary fields.
+
+    Output columns: warehouse_id, name, route_count, latest_forecast_at,
+    upcoming_trucks. Used by both the legacy /warehouses response model
+    and the dashboard BFF's /api/warehouses proxy.
+    """
     engine = get_engine()
     async with engine.connect() as conn:
         result = await conn.execute(
@@ -286,6 +371,54 @@ async def get_all_warehouses() -> list[dict]:
         return [dict(row._mapping) for row in result.fetchall()]
 
 
+async def list_recent_transport_requests(
+    warehouse_id: int | None,
+    status: str | None,
+    limit: int,
+) -> list[dict]:
+    """Return recent transport_requests rows for the dashboard dispatch page.
+
+    Filters:
+      * ``warehouse_id`` — restrict to one warehouse if given.
+      * ``status``      — restrict to a single status value if given.
+      * ``limit``       — cap the result set (1..1000).
+
+    Ordered by ``time_slot_start DESC`` so the "most recent decisions"
+    tables on the dashboard light up the upcoming slots at the top.
+
+    NOTE: this is distinct from PRD ``GET /api/v1/transport-requests``,
+    which filters by an ``office_id`` + time window and joins forecasts
+    to populate ``routes[]``. This endpoint is intentionally a simple
+    row-listing read model so the dashboard can page recent decisions
+    without pulling the PRD contract into UI territory.
+    """
+    conditions: list[str] = []
+    params: dict = {"limit": int(limit)}
+    if warehouse_id is not None:
+        conditions.append("warehouse_id = :warehouse_id")
+        params["warehouse_id"] = int(warehouse_id)
+    if status:
+        conditions.append("status = :status")
+        params["status"] = status
+    where_sql = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+
+    engine = get_engine()
+    async with engine.connect() as conn:
+        result = await conn.execute(
+            text(
+                f"SELECT id, warehouse_id, time_slot_start, time_slot_end, "
+                f"total_containers, truck_capacity, buffer_pct, "
+                f"trucks_needed, calculation, status, actual_vehicles, "
+                f"actual_units, created_at, updated_at "
+                f"FROM transport_requests{where_sql} "
+                f"ORDER BY time_slot_start DESC "
+                f"LIMIT :limit"
+            ),
+            params,
+        )
+        return [dict(row._mapping) for row in result.fetchall()]
+
+
 async def get_transport_requests_window(
     office_id: int,
     range_from: datetime,
@@ -293,35 +426,58 @@ async def get_transport_requests_window(
 ) -> list[dict]:
     """Return PRD §6.2 transport requests for ``office_id`` in ``[from, to]``.
 
-    ``routes[]`` is populated by JOIN-ing against ``forecasts`` whose
-    ``anchor_ts`` falls inside the slot's time window. This reflects the
-    *actual* routes that contributed to the dispatch decision rather than
-    every route the warehouse owns — matching the example in PRD §6.2.
-    Slots without overlapping forecasts (e.g. legacy/seed rows) gracefully
-    return an empty array.
+    ``routes[]`` is populated by unrolling each forecast row's JSON steps
+    (via ``jsonb_array_elements``) and joining by *step timestamp* overlap
+    with the slot's window. The old implementation joined on
+    ``f.anchor_ts`` which is the wall-clock time the forecast was computed
+    — not the time the forecast actually covers. A 5-hour-ahead forecast
+    from 10:00 has steps at 10:30, 11:00, … but an anchor_ts of 10:00, so
+    the previous join missed every forecast whose anchor was outside the
+    request's slot window.
+
+    The step-level overlap rule matches the semantics of
+    ``get_recent_forecasts``: a route contributes to a slot if any of its
+    forecast steps fall inside ``[time_slot_start, time_slot_end)``.
     """
     engine = get_engine()
     async with engine.connect() as conn:
         result = await conn.execute(
             text(
-                "SELECT tr.id, tr.warehouse_id AS office_from_id, "
-                "tr.time_slot_start AS time_window_start, "
-                "tr.time_slot_end   AS time_window_end, "
-                "tr.total_containers AS total_predicted_units, "
-                "tr.trucks_needed   AS vehicles_required, "
-                "tr.status, tr.created_at, "
-                "COALESCE(ARRAY_AGG(DISTINCT f.route_id ORDER BY f.route_id) "
-                "         FILTER (WHERE f.route_id IS NOT NULL), ARRAY[]::INTEGER[]) AS routes "
-                "FROM transport_requests tr "
-                "LEFT JOIN forecasts f "
-                "  ON f.warehouse_id = tr.warehouse_id "
-                "  AND f.anchor_ts  >= tr.time_slot_start "
-                "  AND f.anchor_ts  <  tr.time_slot_end "
-                "WHERE tr.warehouse_id = :office_id "
-                "AND tr.time_slot_start >= :range_from "
-                "AND tr.time_slot_end   <= :range_to "
-                "GROUP BY tr.id "
-                "ORDER BY tr.time_slot_start"
+                """
+                WITH step AS (
+                    SELECT
+                        f.route_id,
+                        f.warehouse_id,
+                        COALESCE(elem ->> 'timestamp', elem ->> 'ts')::timestamp AS step_ts
+                    FROM forecasts f
+                    CROSS JOIN LATERAL jsonb_array_elements(f.forecasts) AS elem
+                    WHERE f.warehouse_id = :office_id
+                )
+                SELECT
+                    tr.id,
+                    tr.warehouse_id AS office_from_id,
+                    tr.time_slot_start AS time_window_start,
+                    tr.time_slot_end   AS time_window_end,
+                    tr.total_containers AS total_predicted_units,
+                    tr.trucks_needed   AS vehicles_required,
+                    tr.status,
+                    tr.created_at,
+                    COALESCE(
+                        ARRAY_AGG(DISTINCT s.route_id ORDER BY s.route_id)
+                            FILTER (WHERE s.route_id IS NOT NULL),
+                        ARRAY[]::INTEGER[]
+                    ) AS routes
+                FROM transport_requests tr
+                LEFT JOIN step s
+                  ON  s.warehouse_id = tr.warehouse_id
+                  AND s.step_ts     >= tr.time_slot_start
+                  AND s.step_ts     <  tr.time_slot_end
+                WHERE tr.warehouse_id = :office_id
+                  AND tr.time_slot_start >= :range_from
+                  AND tr.time_slot_end   <= :range_to
+                GROUP BY tr.id
+                ORDER BY tr.time_slot_start
+                """
             ),
             {
                 "office_id": office_id,

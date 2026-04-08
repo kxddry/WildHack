@@ -74,11 +74,15 @@ export default function DispatchPage() {
       if (!warehouseId) return;
       setLoadingRequests(true);
       setError(null);
-      fetch(`/api/db/requests?warehouse_id=${warehouseId}&limit=100`)
+      fetch(`/api/transport-requests?warehouse_id=${warehouseId}&limit=100`)
         .then((r) => r.json())
         .then((data) => {
           if (data.error) throw new Error(data.error);
-          setRequests(data.requests ?? []);
+          // dispatcher-service returns {items, total}; legacy clients used
+          // {requests: [...]}. Accept either so future API changes don't
+          // require touching the UI.
+          const rows = data.items ?? data.requests ?? [];
+          setRequests(rows);
         })
         .catch((e) => setError(e.message))
         .finally(() => setLoadingRequests(false));
@@ -87,7 +91,7 @@ export default function DispatchPage() {
   );
 
   useEffect(() => {
-    fetch("/api/db/warehouses")
+    fetch("/api/warehouses")
       .then((r) => r.json())
       .then((data) => {
         if (data.error) throw new Error(data.error);
@@ -114,7 +118,7 @@ export default function DispatchPage() {
     try {
       // Fetch the latest forecast anchor_ts for this warehouse to build a valid time range
       const fcRes = await fetch(
-        `/api/db/forecasts?warehouse_id=${selectedWarehouse}&limit=500`
+        `/api/forecasts?warehouse_id=${selectedWarehouse}&limit=500`
       );
       const fcData = await fcRes.json();
       const forecasts: Array<{ anchor_ts: string }> = fcData.forecasts ?? [];

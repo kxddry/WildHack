@@ -106,6 +106,50 @@ class ModelManager:
     def is_mock(self) -> bool:
         return self._mock_mode
 
+    @property
+    def runtime_version(self) -> str:
+        """Return the active model version with deterministic precedence.
+
+        Precedence (highest to lowest) — intentionally independent of
+        ``settings.model_version`` unless every other signal is missing:
+
+        1. ``metadata.model_version`` — the authoritative value written by
+           the trainer into ``model_metadata.json`` and atomically copied to
+           the canonical metadata path during promotion. This is what the
+           retraining service persists to ``model_metadata`` in Postgres,
+           so it's the right value to echo back to predict consumers.
+        2. Stem of the loaded artifact path — covers legacy artifacts
+           shipped without a metadata file, and keeps promotion-by-rename
+           working (e.g. ``v20250408_120000.pkl`` → ``v20250408_120000``).
+        3. ``settings.model_version`` — legacy static label. Reserved as a
+           last-resort fallback for the mock predictor and for tests that
+           construct ``ModelManager`` without loading any artifact.
+        """
+        # 1. Metadata-driven version. Guard against empty strings so a file
+        #    with ``{"model_version": ""}`` doesn't poison the accessor.
+        meta_version = self._metadata.get("model_version") if self._metadata else None
+        if isinstance(meta_version, str) and meta_version.strip():
+            return meta_version.strip()
+
+        # 2. Promoted artifact stem.
+        if self._model_path:
+            stem = Path(self._model_path).stem
+            if stem and stem != "model":
+                # "model" is the canonical symlink-style name; fall through
+                # to the legacy setting so consumers never see the literal
+                # sentinel "model" as a version.
+                return stem
+
+        # 3. Legacy mock / tests fallback — lazy import so core.model stays
+        #    independent of the FastAPI settings singleton at import time
+        #    (tests build ModelManager directly without FastAPI).
+        try:
+            from app.config import settings  # local import by design
+
+            return settings.model_version
+        except Exception:
+            return "unknown"
+
     def enable_mock_mode(self) -> None:
         """Enable mock predictions for local development."""
         self._mock_mode = True
@@ -316,6 +360,7 @@ class ModelManager:
         if self._mock_mode:
             return {
                 "model_path": None,
+                "model_version": self.runtime_version,
                 "model_type": "MockPredictor",
                 "objective": "regression",
                 "cv_score": None,
@@ -333,6 +378,9 @@ class ModelManager:
 
         return {
             "model_path": self._model_path,
+            # Runtime version, not the static settings label. Caller-visible
+            # contract guaranteed by `runtime_version` precedence rules.
+            "model_version": self.runtime_version,
             "model_type": type(self._model).__name__,
             "objective": params.get("objective", self._metadata.get("objective", "unknown")),
             "cv_score": self._metadata.get("cv_score"),
@@ -340,5 +388,5 @@ class ModelManager:
             "feature_names": intro["feature_names"],
             "n_estimators_fitted": intro["n_estimators"],
             "training_date": self._metadata.get("training_date"),
-            **{k: v for k, v in self._metadata.items() if k not in ("cv_score", "training_date", "objective")},
+            **{k: v for k, v in self._metadata.items() if k not in ("model_version", "cv_score", "training_date", "objective")},
         }

@@ -20,6 +20,8 @@ from fastapi import APIRouter, HTTPException, Query
 from app.api.schemas import (
     BusinessMetricsResponse,
     TransportRequestPRD,
+    TransportRequestRecent,
+    TransportRequestRecentListResponse,
     TransportRequestsListResponse,
 )
 from app.storage import postgres
@@ -74,6 +76,30 @@ async def list_transport_requests(
         range_from=range_from,
         range_to=range_to,
     )
+
+
+@router.get(
+    "/transport-requests/recent",
+    response_model=TransportRequestRecentListResponse,
+)
+async def list_recent_transport_requests(
+    warehouse_id: int | None = Query(None, ge=0, description="Filter by warehouse"),
+    status: str | None = Query(None, description="Filter by status"),
+    limit: int = Query(50, ge=1, le=1000, description="Max rows to return"),
+) -> TransportRequestRecentListResponse:
+    """Dashboard-facing list of recent dispatch decisions.
+
+    Distinct from PRD ``GET /transport-requests`` which enforces a time
+    window and joins forecasts to populate ``routes[]``. This endpoint is
+    a plain row listing for the dashboard dispatch page.
+    """
+    rows = await postgres.list_recent_transport_requests(
+        warehouse_id=warehouse_id,
+        status=status,
+        limit=limit,
+    )
+    items = [TransportRequestRecent(**row) for row in rows]
+    return TransportRequestRecentListResponse(items=items, total=len(items))
 
 
 @router.get("/metrics/business", response_model=BusinessMetricsResponse)

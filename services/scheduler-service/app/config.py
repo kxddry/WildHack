@@ -1,9 +1,8 @@
-from pydantic import ConfigDict
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = ConfigDict(env_file=".env")
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     database_url: str = "postgresql+asyncpg://wildhack:wildhack_dev@localhost:5432/wildhack"
     prediction_service_url: str = "http://prediction-service:8000"
@@ -20,6 +19,12 @@ class Settings(BaseSettings):
 
     # Shadow model auto-promotion: promote after this many consecutive wins
     shadow_promote_streak_threshold: int = 3
+
+    # Shared internal secret. Required on POST /pipeline/trigger,
+    # POST /quality/trigger, and when the scheduler calls prediction-service
+    # /model/* control routes. Empty disables authentication (dev mode only —
+    # docker-compose must inject a real value in any shared environment).
+    internal_api_token: str = ""
 
 
 settings = Settings()

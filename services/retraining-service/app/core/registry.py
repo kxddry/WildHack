@@ -26,6 +26,16 @@ class ModelRegistry:
         self._client = http_client
         self._prediction_url = prediction_url
 
+    def _internal_headers(self) -> dict[str, str]:
+        """Build the X-Internal-Token header for protected prediction routes.
+
+        Returns an empty dict if the secret is not configured so unit tests
+        and local dev without an env var still exercise the happy path.
+        Production compose must populate the var explicitly.
+        """
+        token = (settings.internal_api_token or "").strip()
+        return {"X-Internal-Token": token} if token else {}
+
     async def register_model(
         self,
         version: str,
@@ -57,36 +67,143 @@ class ModelRegistry:
         resp = await self._client.post(
             f"{self._prediction_url}/model/shadow/load",
             params={"path": model_path},
+            headers=self._internal_headers(),
             timeout=30.0,
         )
         resp.raise_for_status()
         return resp.json()
 
+    @staticmethod
+    def _copy_canonical_pair(model_path: str) -> dict[str, str]:
+        """Atomically copy the versioned artifact and its metadata sibling.
+
+        Two files must survive a service restart: the model artifact and
+        the metadata JSON next to it. If we only copy the artifact the old
+        behaviour a restart reloads the promoted artifact but reads the
+        *previous* metadata JSON, and since ``runtime_version`` prefers
+        ``metadata.model_version``, the model would silently identify
+        itself as the old version forever.
+
+        Both files are written to a ``.tmp`` sibling first and then
+        ``os.replace``-d so a crash mid-copy never leaves the canonical
+        pair in a split state.
+        """
+        result: dict[str, str] = {}
+        src_model = Path(model_path)
+        canonical_model = src_model.parent / settings.canonical_model_filename
+        try:
+            tmp = canonical_model.with_suffix(canonical_model.suffix + ".tmp")
+            shutil.copy2(src_model, tmp)
+            os.replace(tmp, canonical_model)
+            result["model"] = str(canonical_model)
+        except Exception:
+            logger.exception(
+                "Failed to copy model to canonical path — promotion succeeded in-memory"
+            )
+
+        # Metadata sibling. Trainer writes it as ``<version>_metadata.json``;
+        # promoted versions must live at ``model_metadata.json`` so the
+        # prediction-service lifespan loader reads the correct blob.
+        metadata_src = src_model.with_name(src_model.stem + "_metadata.json")
+        canonical_metadata = src_model.parent / settings.canonical_metadata_filename
+        if metadata_src.exists():
+            try:
+                tmp = canonical_metadata.with_suffix(canonical_metadata.suffix + ".tmp")
+                shutil.copy2(metadata_src, tmp)
+                os.replace(tmp, canonical_metadata)
+                result["metadata"] = str(canonical_metadata)
+            except Exception:
+                logger.exception(
+                    "Failed to copy metadata sibling %s — version metadata will "
+                    "be stale on next restart",
+                    metadata_src,
+                )
+        else:
+            logger.warning(
+                "Metadata sibling %s not found; skipping canonical metadata copy",
+                metadata_src,
+            )
+        return result
+
+    @staticmethod
+    def _copy_versioned_feature_artifacts(model_path: str) -> dict[str, str]:
+        """Copy versioned static-aggs/fill-values files onto canonical names.
+
+        Old registry entries do not have versioned inference artifacts. That is
+        not fatal for promote/shadow workflows, but it does mean the version is
+        unavailable for isolated team-track evaluation.
+        """
+        result: dict[str, str] = {}
+        src_model = Path(model_path)
+        version = src_model.stem
+        output_dir = src_model.parent
+
+        copies = (
+            (
+                output_dir / f"{version}_static_aggs.json",
+                output_dir / settings.canonical_static_aggs_filename,
+                "static_aggs",
+            ),
+            (
+                output_dir / f"{version}_fill_values.json",
+                output_dir / settings.canonical_fill_values_filename,
+                "fill_values",
+            ),
+        )
+
+        for src, dst, key in copies:
+            if not src.exists():
+                logger.info(
+                    "Versioned feature artifact %s not found for %s; leaving canonical %s in place",
+                    src.name,
+                    version,
+                    dst.name,
+                )
+                continue
+            try:
+                tmp = dst.with_suffix(dst.suffix + ".tmp")
+                shutil.copy2(src, tmp)
+                os.replace(tmp, dst)
+                result[key] = str(dst)
+            except Exception:
+                logger.exception(
+                    "Failed to copy %s to canonical path %s",
+                    src,
+                    dst,
+                )
+
+        return result
+
     async def promote_to_primary(self, model_path: str) -> dict:
-        """Promote a model to primary in the prediction service."""
+        """Promote a model to primary in the prediction service.
+
+        Order of operations:
+        1. Tell prediction-service to swap the in-memory shadow → primary.
+        2. Copy artifact + metadata JSON to canonical paths atomically
+           so a restart loads the same pair.
+        3. Reload static aggregations so inference features stay in sync
+           with the promoted model's training distribution.
+        """
         resp = await self._client.post(
             f"{self._prediction_url}/model/shadow/promote",
+            headers=self._internal_headers(),
             timeout=30.0,
         )
         resp.raise_for_status()
         result = resp.json()
 
-        # Copy to canonical model.pkl so prediction-service reloads correctly on restart
-        src = Path(model_path)
-        canonical = src.parent / settings.canonical_model_filename
-        try:
-            tmp = canonical.with_suffix(".tmp")
-            shutil.copy2(src, tmp)
-            os.replace(tmp, canonical)
-            logger.info("Copied %s → %s", src.name, canonical.name)
-        except Exception:
-            logger.exception("Failed to copy model to canonical path — promotion succeeded in-memory")
+        copy_result = self._copy_canonical_pair(model_path)
+        result["canonical_copy"] = copy_result
+        result["canonical_feature_artifacts"] = self._copy_versioned_feature_artifacts(
+            model_path
+        )
 
         # Reload static aggregations in prediction-service so feature statistics
         # match the newly promoted model's training distribution.
         try:
             reload_resp = await self._client.post(
                 f"{self._prediction_url}/model/reload-features",
+                headers=self._internal_headers(),
                 timeout=30.0,
             )
             if reload_resp.status_code == 200:
@@ -104,6 +221,7 @@ class ModelRegistry:
         """Tell prediction service to reload model from disk."""
         resp = await self._client.post(
             f"{self._prediction_url}/model/reload",
+            headers=self._internal_headers(),
             timeout=30.0,
         )
         resp.raise_for_status()
