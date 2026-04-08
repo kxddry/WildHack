@@ -147,7 +147,20 @@ graph LR
 
 ### Текущий production-compatible артефакт
 
-В репозитории уже лежит совместимая с runtime модель:
+В репозитории лежит совместимый с runtime bundle в `final_submissions/production_team_model/models/`.
+Артефакты модели (`model.pkl`, `static_aggs.json`) хранятся в Git LFS, поэтому на новой машине перед первым запуском нужно сначала подтянуть LFS-объекты, а затем скопировать bundle в runtime-каталог `models/`:
+
+```bash
+git lfs install
+git lfs pull
+
+cp final_submissions/production_team_model/models/model.pkl models/model.pkl
+cp final_submissions/production_team_model/models/static_aggs.json models/static_aggs.json
+cp final_submissions/production_team_model/models/fill_values.json models/fill_values.json
+cp final_submissions/production_team_model/models/v20260408_051606_metadata.json models/model_metadata.json
+```
+
+После копирования runtime использует:
 
 - файл: `models/model.pkl`
 - metadata: `models/model_metadata.json`
@@ -352,6 +365,8 @@ docker compose -f infrastructure/docker-compose.yml up --build
 - `INTERNAL_API_TOKEN`
 
 Для локального ноутбука можно оставить demo-значения из шаблона, но для любого общего окружения токены нужно заменить.
+
+Перед первым `make up` или `docker compose up` убедитесь, что в корневом `models/` уже лежат `model.pkl`, `static_aggs.json`, `fill_values.json` из bundle `final_submissions/production_team_model/models/` и что Git LFS-артефакты были скачаны.
 
 Поведение `prediction-service` при старте:
 
