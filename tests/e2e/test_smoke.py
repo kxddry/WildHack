@@ -8,7 +8,7 @@ import pytest
 
 BASE_PREDICTION = "http://localhost:8000"
 BASE_DISPATCHER = "http://localhost:8001"
-BASE_DASHBOARD = "http://localhost:8501"
+BASE_DASHBOARD = "http://localhost:4000"
 
 
 @pytest.mark.e2e

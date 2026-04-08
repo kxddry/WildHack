@@ -19,7 +19,7 @@ import re
 import pytest
 from playwright.sync_api import Page, expect, sync_playwright
 
-BASE_URL = "http://localhost:8501"
+BASE_URL = "http://localhost:4000"
 
 # Timeout for navigation and assertions (ms)
 NAV_TIMEOUT = 15_000
