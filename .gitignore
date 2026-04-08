@@ -13,6 +13,11 @@ postgres_data/
 .claude/
 catboost_info/
 
+# Local-dev stack state (scripts/local/*.sh) — pidfiles, logs, E2E venv,
+# downloaded Playwright browsers. See Makefile for entry points.
+.local/
+services/*/.venv/
+
 # Large data files — not for git
 Data/
 Notebooks/
