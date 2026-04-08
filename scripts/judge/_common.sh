@@ -108,19 +108,17 @@ db_count() {
 bootstrap_dataset() {
   local dataset="$REPO_ROOT/Data/raw/train_team_track.parquet"
   [ -f "$dataset" ] || die "Bootstrap dataset not found at $dataset"
-  [ -n "$DATA_INGEST_TOKEN" ] || die "DATA_INGEST_TOKEN is empty in .env"
 
-  log "Uploading bundled Team Track history snapshot"
-  local response
-  response=$(
-    curl -fsS \
-      -X POST \
-      -H "X-Ingest-Token: $DATA_INGEST_TOKEN" \
-      -F "file=@${dataset}" \
-      "http://127.0.0.1:${RETRAINING_PORT}/upload-dataset?auto_refresh=false"
-  ) || die "Dataset upload failed"
-  ok "History snapshot uploaded"
-  printf "%s\n" "$response"
+  log "Seeding bundled Team Track history snapshot"
+  local sync_database_url="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}"
+  compose run --rm --no-deps -T \
+    -e "DATABASE_URL=${sync_database_url}" \
+    -v "$REPO_ROOT:/workspace:ro" \
+    -w /workspace \
+    retraining-service \
+    python scripts/seed_status_history.py \
+    || die "History bootstrap failed"
+  ok "History snapshot seeded"
 }
 
 trigger_pipeline() {
