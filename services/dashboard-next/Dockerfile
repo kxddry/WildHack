@@ -23,4 +23,11 @@ USER nextjs
 EXPOSE 3000
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
+
+# Node 22 ships with global fetch, so the probe needs no extra packages.
+# We hit the standalone server's root URL — Next.js standalone always
+# returns a routable response on /, so 2xx/3xx == process is serving.
+HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=6 \
+    CMD node -e "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))" || exit 1
+
 CMD ["node", "server.js"]

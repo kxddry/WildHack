@@ -1,133 +1,298 @@
+# WildHack transport-dispatch stack
+# ----------------------------------
+# Bring up:    docker compose -f infrastructure/docker-compose.yml up --build
+# Tear down:   docker compose -f infrastructure/docker-compose.yml down -v
+#
+# All knobs (ports, passwords, MOCK_MODE) live in the repo-root .env file.
+# A baseline .env.example is checked in — copy it to .env on first clone:
+#     cp .env.example .env
+#
+# Image namespace is pinned via top-level ``name:`` so two clones of this
+# repo on the same machine (e.g. WildHack/ and wildhack/) share the same
+# image cache and the same network/volume names instead of forking off
+# parent-directory-derived prefixes.
+#
+# NOTE ON ``platform:``
+# ---------------------
+# Platform is intentionally NOT pinned in this file. Compose will pick the
+# host-native architecture for every image, which is what you want 99% of
+# the time (Apple Silicon runs arm64, Linux CI runs amd64, etc). A prior
+# attempt to pin `linux/amd64` forced Rosetta/QEMU on Apple Silicon and
+# made `compose up` take 20+ minutes. If you need cross-arch reproducibility
+# in CI, set `platform: linux/amd64` inline for the affected service or
+# pass `--platform` to `docker compose build`.
+
+name: ${COMPOSE_PROJECT_NAME:-wildhack}
+
+# Reusable healthcheck cadence. Each app container also ships its own
+# HEALTHCHECK in its Dockerfile so that `docker ps` reports health even
+# outside compose. The compose-level healthchecks are intentionally
+# redundant so we can tweak probe cadence (start_period in particular)
+# per environment without rebuilding images.
+#
+# Anchor is named for what it contains (cadence only, no `test:`) so the
+# same block can be merged into both Python and Node healthchecks below.
+x-healthcheck-cadence: &healthcheck-cadence
+  interval: 10s
+  timeout: 5s
+  retries: 6
+  start_period: 30s
+
 services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: wildhack
-      POSTGRES_USER: wildhack
-      POSTGRES_PASSWORD: wildhack_dev
+      POSTGRES_DB: ${POSTGRES_DB:-wildhack}
+      POSTGRES_USER: ${POSTGRES_USER:-wildhack}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-wildhack_dev}
     ports:
-      - "5432:5432"
+      # Bind to loopback only — no reason to expose the dev DB to the LAN.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U wildhack"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-wildhack} -d ${POSTGRES_DB:-wildhack}"]
       interval: 5s
-      retries: 5
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  # One-shot migration runner. Applies infrastructure/postgres/migrations/*.sql
+  # in lexical order on every `compose up`. Migrations are idempotent
+  # (IF NOT EXISTS / guarded DO blocks), so re-running is safe.
+  #
+  # Why this exists: docker-entrypoint-initdb.d/init.sql only runs on a FRESH
+  # data volume, so any schema additions after the first `compose up` never
+  # reach existing developer/CI databases without manual intervention. This
+  # sidecar closes that gap without introducing a heavyweight migration tool.
+  #
+  # The shell script is strictly POSIX (sh/ash compatible) — no `shopt`,
+  # no bash arrays — because the postgres:16-alpine image only ships busybox
+  # ash, and the previous shopt-based version was silently failing.
+  db-migrate:
+    image: postgres:16-alpine
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: ${POSTGRES_USER:-wildhack}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-wildhack_dev}
+      PGDATABASE: ${POSTGRES_DB:-wildhack}
+    volumes:
+      - ./postgres/migrations:/migrations:ro
+    entrypoint: ["sh", "-eu", "-c"]
+    command:
+      - |
+        echo "[db-migrate] Applying migrations from /migrations ..."
+        count=0
+        # POSIX-safe: when no .sql files match, the literal pattern survives
+        # the glob expansion and the [ -e ] guard skips it. No `shopt -s
+        # nullglob` (which is bash-only) and no error.
+        for f in /migrations/*.sql; do
+          [ -e "$$f" ] || continue
+          echo "[db-migrate]  -> $$f"
+          psql -v ON_ERROR_STOP=1 -q -f "$$f"
+          count=$$((count + 1))
+        done
+        echo "[db-migrate] Done. $$count migration file(s) applied."
+    restart: "no"
 
   prediction-service:
     build:
       context: ../services/prediction-service
-    ports:
-      - "8000:8000"
+    image: wildhack/prediction-service:dev
+    env_file:
+      - ../.env
     environment:
-      DATABASE_URL: postgresql+asyncpg://wildhack:wildhack_dev@postgres:5432/wildhack
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-wildhack}:${POSTGRES_PASSWORD:-wildhack_dev}@postgres:5432/${POSTGRES_DB:-wildhack}
+      # Container paths for the three artifacts checked at startup. These
+      # are intentionally hardcoded to the mount point (not read from .env)
+      # because they are a property of the container layout, not user
+      # configuration. MOCK_MODE controls fail-fast vs synthetic-fallback
+      # and comes from .env only — do NOT redeclare it here or the env_file
+      # value becomes unreachable.
       MODEL_PATH: /app/models/model.pkl
+      STATIC_AGGS_PATH: /app/models/static_aggs.json
+      FILL_VALUES_PATH: /app/models/fill_values.json
+    ports:
+      - "${PREDICTION_PORT:-8000}:8000"
     volumes:
-      - ../models:/app/models
+      # Read-only mount: prediction-service consumes artifacts produced by
+      # retraining-service. Splitting :ro from :rw makes the producer/
+      # consumer contract explicit and prevents this service from acciden-
+      # tally writing to the shared models/ directory.
+      - ../models:/app/models:ro
     depends_on:
       postgres:
         condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      <<: *healthcheck-cadence
+      test: ["CMD", "python", "-c", "import urllib.request,sys; r=urllib.request.urlopen('http://127.0.0.1:8000/health',timeout=3); sys.exit(0 if r.status==200 else 1)"]
+      start_period: 40s
+    stop_grace_period: 30s
+    restart: unless-stopped
 
   dispatcher-service:
     build:
       context: ../services/dispatcher-service
-    ports:
-      - "8001:8001"
+    image: wildhack/dispatcher-service:dev
+    env_file:
+      - ../.env
     environment:
-      DATABASE_URL: postgresql+asyncpg://wildhack:wildhack_dev@postgres:5432/wildhack
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-wildhack}:${POSTGRES_PASSWORD:-wildhack_dev}@postgres:5432/${POSTGRES_DB:-wildhack}
       PREDICTION_SERVICE_URL: http://prediction-service:8000
-      TRUCK_CAPACITY: "33"
-      BUFFER_PCT: "0.10"
-      MIN_TRUCKS: "1"
-      ADAPTIVE_BUFFER: "false"
-      MIN_BUFFER_PCT: "0.05"
-      MAX_BUFFER_PCT: "0.25"
+      TRUCK_CAPACITY: ${TRUCK_CAPACITY:-33}
+      BUFFER_PCT: ${BUFFER_PCT:-0.10}
+      MIN_TRUCKS: ${MIN_TRUCKS:-1}
+      ADAPTIVE_BUFFER: ${ADAPTIVE_BUFFER:-false}
+      MIN_BUFFER_PCT: ${MIN_BUFFER_PCT:-0.05}
+      MAX_BUFFER_PCT: ${MAX_BUFFER_PCT:-0.25}
+    ports:
+      - "${DISPATCHER_PORT:-8001}:8001"
     depends_on:
       postgres:
         condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
       prediction-service:
-        condition: service_started
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck-cadence
+      test: ["CMD", "python", "-c", "import urllib.request,sys; r=urllib.request.urlopen('http://127.0.0.1:8001/health',timeout=3); sys.exit(0 if r.status==200 else 1)"]
+    stop_grace_period: 30s
+    restart: unless-stopped
 
   dashboard:
     build:
       context: ../services/dashboard-next
-    ports:
-      - "8501:3000"
+    image: wildhack/dashboard:dev
+    env_file:
+      - ../.env
     environment:
       PREDICTION_SERVICE_URL: http://prediction-service:8000
       DISPATCHER_SERVICE_URL: http://dispatcher-service:8001
-      DATABASE_URL: postgresql://wildhack:wildhack_dev@postgres:5432/wildhack
+      DATABASE_URL: postgresql://${POSTGRES_USER:-wildhack}:${POSTGRES_PASSWORD:-wildhack_dev}@postgres:5432/${POSTGRES_DB:-wildhack}
+    ports:
+      - "${DASHBOARD_PORT:-4000}:3000"
     depends_on:
       postgres:
         condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
       prediction-service:
-        condition: service_started
+        condition: service_healthy
       dispatcher-service:
-        condition: service_started
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck-cadence
+      # Node 22 ships global fetch. Hit "/" — Next.js standalone always
+      # returns <500 on root (200 or a 307 redirect to a locale). Accept
+      # any non-5xx as proof the process is serving.
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"]
+      start_period: 40s
+    stop_grace_period: 30s
+    restart: unless-stopped
 
   scheduler-service:
     build:
       context: ../services/scheduler-service
-    ports:
-      - "8002:8002"
+    image: wildhack/scheduler-service:dev
+    env_file:
+      - ../.env
     environment:
-      DATABASE_URL: postgresql+asyncpg://wildhack:wildhack_dev@postgres:5432/wildhack
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-wildhack}:${POSTGRES_PASSWORD:-wildhack_dev}@postgres:5432/${POSTGRES_DB:-wildhack}
       PREDICTION_SERVICE_URL: http://prediction-service:8000
       DISPATCHER_SERVICE_URL: http://dispatcher-service:8001
-      PREDICTION_INTERVAL_MINUTES: "30"
-      QUALITY_CHECK_INTERVAL_MINUTES: "60"
       RETRAINING_SERVICE_URL: http://retraining-service:8003
+      PREDICTION_INTERVAL_MINUTES: ${PREDICTION_INTERVAL_MINUTES:-30}
+      QUALITY_CHECK_INTERVAL_MINUTES: ${QUALITY_CHECK_INTERVAL_MINUTES:-60}
+    ports:
+      - "${SCHEDULER_PORT:-8002}:8002"
     depends_on:
       postgres:
         condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
       prediction-service:
-        condition: service_started
+        condition: service_healthy
       dispatcher-service:
-        condition: service_started
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck-cadence
+      test: ["CMD", "python", "-c", "import urllib.request,sys; r=urllib.request.urlopen('http://127.0.0.1:8002/health',timeout=3); sys.exit(0 if r.status==200 else 1)"]
+    stop_grace_period: 30s
+    restart: unless-stopped
 
   retraining-service:
     build:
       context: ../services/retraining-service
-    ports:
-      - "8003:8003"
+    image: wildhack/retraining-service:dev
+    env_file:
+      - ../.env
     environment:
-      DATABASE_URL: postgresql+asyncpg://wildhack:wildhack_dev@postgres:5432/wildhack
-      SYNC_DATABASE_URL: postgresql://wildhack:wildhack_dev@postgres:5432/wildhack
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-wildhack}:${POSTGRES_PASSWORD:-wildhack_dev}@postgres:5432/${POSTGRES_DB:-wildhack}
+      SYNC_DATABASE_URL: postgresql://${POSTGRES_USER:-wildhack}:${POSTGRES_PASSWORD:-wildhack_dev}@postgres:5432/${POSTGRES_DB:-wildhack}
       PREDICTION_SERVICE_URL: http://prediction-service:8000
       MODEL_OUTPUT_DIR: /app/models
-      TRAINING_WINDOW_DAYS: "7"
+      TRAINING_WINDOW_DAYS: ${TRAINING_WINDOW_DAYS:-7}
+    ports:
+      - "${RETRAINING_PORT:-8003}:8003"
     volumes:
-      - ../models:/app/models
+      # Writable: retraining-service is the producer of artifacts under
+      # models/. The prediction-service mounts the same path read-only.
+      - ../models:/app/models:rw
     depends_on:
       postgres:
         condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
       prediction-service:
-        condition: service_started
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck-cadence
+      test: ["CMD", "python", "-c", "import urllib.request,sys; r=urllib.request.urlopen('http://127.0.0.1:8003/health',timeout=3); sys.exit(0 if r.status==200 else 1)"]
+      start_period: 40s
+    stop_grace_period: 30s
+    restart: unless-stopped
 
   prometheus:
     image: prom/prometheus:v2.51.0
     ports:
-      - "9090:9090"
+      - "${PROMETHEUS_PORT:-9090}:9090"
     volumes:
-      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     depends_on:
-      - prediction-service
-      - dispatcher-service
+      prediction-service:
+        condition: service_healthy
+      dispatcher-service:
+        condition: service_healthy
+    restart: unless-stopped
 
   grafana:
     image: grafana/grafana:10.4.0
     ports:
-      - "3000:3000"
+      # Default 3001 to dodge collisions with locally-running Next.js dev
+      # servers on 3000.
+      - "${GRAFANA_PORT:-3001}:3000"
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: admin
-      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD:-admin}
+      # Anonymous access is OFF by default. Set GF_AUTH_ANONYMOUS_ENABLED=true
+      # in .env only for fully-isolated local demos — on shared Wi-Fi this
+      # would leak business metrics to anyone on the network.
+      GF_AUTH_ANONYMOUS_ENABLED: ${GF_AUTH_ANONYMOUS_ENABLED:-false}
       GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
     volumes:
-      - ./grafana/provisioning:/etc/grafana/provisioning
-      - ./grafana/dashboards:/var/lib/grafana/dashboards
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
     depends_on:
       - prometheus
+    restart: unless-stopped
 
 volumes:
   postgres_data:
