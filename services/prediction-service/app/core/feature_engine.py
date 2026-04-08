@@ -25,10 +25,20 @@ HOLIDAY_DATES = pd.to_datetime([
 
 STATUS_COLS = [f"status_{i}" for i in range(1, 9)]
 
+# Native LightGBM categorical features — MUST match the training-time
+# ``booster.params['categorical_column']`` for the production model. Keep in
+# sync with the trainer; ``ModelManager`` cross-checks feature names at load.
 CAT_FEATURES = [
-    "office_from_id", "route_id", "dow", "pod",
-    "is_hooliday", "slot", "horizon_step",
+    "dow", "pod", "slot", "is_hooliday", "horizon_step",
 ]
+
+# Identifier/merge-key columns. They are numeric (int64) at the model level,
+# but MUST NOT be touched by ``_fill_na``: a zero fallback would silently
+# rewrite them into the ``route_id=0`` / ``office_from_id=0`` bucket in
+# ``_merge_static_aggs`` and poison predictions without any error surface.
+# This is a distinct concern from ``CAT_FEATURES`` (the Booster's native
+# categoricals) and is kept separate to avoid semantic overloading of one list.
+MERGE_KEY_COLS = ["route_id", "office_from_id"]
 
 # Matches _add_default_ts_features in DatasetBuilder
 TARGET = "target_2h"
@@ -467,9 +477,16 @@ class InferenceFeatureEngine:
         return df
 
     def _fill_na(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Fill NaN values in numeric columns using stored median fill values."""
+        """Fill NaN values in numeric columns using stored median fill values.
+
+        Merge-key columns (``route_id``, ``office_from_id``) are numeric at
+        the model level but are IDs, not measurements — filling them with 0
+        would silently rewrite them into the zero-bucket in downstream
+        static-aggregation merges. They are excluded here.
+        """
         df = df.copy()
-        numeric_cols = [c for c in df.columns if c not in CAT_FEATURES]
+        excluded = set(CAT_FEATURES) | set(MERGE_KEY_COLS)
+        numeric_cols = [c for c in df.columns if c not in excluded]
 
         if self._fill_values:
             for col in numeric_cols:

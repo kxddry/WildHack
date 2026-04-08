@@ -14,5 +14,12 @@ class Settings(BaseSettings):
     static_aggs_path: str = "models/static_aggs.json"
     fill_values_path: str = "models/fill_values.json"
 
+    # Local-dev synthetic fallback. When MOCK_MODE=1, missing model artifacts
+    # cause the service to enable a deterministic mock predictor instead of
+    # crashing at startup. When unset (default), the service fails fast — this
+    # prevents silent data corruption in any environment that thinks it is
+    # serving real predictions.
+    mock_mode: bool = False
+
 
 settings = Settings()

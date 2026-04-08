@@ -12,6 +12,73 @@ logger = logging.getLogger(__name__)
 _STATUS_COLS = [f"status_{i}" for i in range(1, 9)]
 
 
+def _introspect_sklearn(model: Any) -> dict[str, Any]:
+    """Normalize a fitted lightgbm sklearn wrapper (LGBMRegressor/Classifier/Ranker)."""
+    booster = model.booster_
+    params = booster.params if hasattr(booster, "params") else {}
+    return {
+        "n_features": int(model.n_features_),
+        "feature_names": list(model.feature_name_),
+        "n_estimators": int(model.n_estimators_),
+        "params": params or {},
+    }
+
+
+def _introspect_booster(model: Any) -> dict[str, Any]:
+    """Normalize a raw lightgbm.Booster."""
+    params = getattr(model, "params", {}) or {}
+    try:
+        n_estimators = int(model.current_iteration())
+    except (AttributeError, TypeError, ValueError):
+        n_estimators = int(model.num_trees())
+    return {
+        "n_features": int(model.num_feature()),
+        "feature_names": list(model.feature_name()),
+        "n_estimators": n_estimators,
+        "params": params,
+    }
+
+
+def _introspect_lgb(model: Any) -> dict[str, Any]:
+    """Return a normalized view over LightGBM sklearn wrapper or raw Booster.
+
+    Prefers ``isinstance`` against real lightgbm classes so the dispatch is
+    independent of attribute name drift (e.g. ``n_features_`` vs
+    ``n_features_in_`` in future releases) and tolerant of wrappers with
+    lazy-initialised attributes. Falls back to duck-typing only when lightgbm
+    cannot be imported (keeps unit tests with plain ``MagicMock`` happy) or
+    the object is not a real lightgbm class.
+
+    Returns a dict with keys: n_features, feature_names, n_estimators, params.
+    """
+    try:
+        import lightgbm as lgb
+
+        if isinstance(model, lgb.LGBMModel):
+            return _introspect_sklearn(model)
+        if isinstance(model, lgb.Booster):
+            return _introspect_booster(model)
+    except ImportError:
+        pass
+
+    # Fallback for unit-test doubles (MagicMock, custom stubs).
+    if hasattr(model, "n_features_") and hasattr(model, "booster_"):
+        return _introspect_sklearn(model)
+
+    if (
+        hasattr(model, "num_feature")
+        and callable(getattr(model, "num_feature"))
+        and hasattr(model, "feature_name")
+        and callable(getattr(model, "feature_name"))
+    ):
+        return _introspect_booster(model)
+
+    raise TypeError(
+        f"Unsupported model type: {type(model).__name__}. "
+        "Expected lightgbm.LGBMModel (sklearn wrapper) or lightgbm.Booster."
+    )
+
+
 class ModelManager:
     """Loads and serves a LightGBM model with optional metadata.
 
@@ -23,11 +90,13 @@ class ModelManager:
         self._model: Any | None = None
         self._metadata: dict[str, Any] = {}
         self._model_path: str | None = None
+        self._feature_names: list[str] = []
         self._mock_mode: bool = False
         self._shadow_model: Any | None = None
         self._shadow_metadata: dict[str, Any] = {}
         self._shadow_path: str | None = None
         self._shadow_version: str | None = None
+        self._shadow_feature_names: list[str] = []
 
     @property
     def is_loaded(self) -> bool:
@@ -68,9 +137,11 @@ class ModelManager:
             self._metadata = {}
             logger.info("No model_metadata.json found, using empty metadata")
 
+        intro = _introspect_lgb(self._model)
+        self._feature_names = intro["feature_names"]
         logger.info(
             "Model loaded successfully. Feature count: %d",
-            self._model.n_features_,
+            intro["n_features"],
         )
 
     def predict(self, features: pd.DataFrame) -> np.ndarray:
@@ -85,8 +156,41 @@ class ModelManager:
         if self._model is None:
             raise RuntimeError("Model is not loaded. Call load() first.")
 
-        raw_preds = self._model.predict(features)
+        aligned = self._align_features(features, self._feature_names)
+        raw_preds = self._model.predict(aligned)
         return np.clip(raw_preds, 0, None)
+
+    @staticmethod
+    def _align_features(features: pd.DataFrame, feature_names: list[str]) -> pd.DataFrame:
+        """Project and reorder a feature DataFrame to match model expectations.
+
+        The inference feature engine produces a superset of columns, while a
+        raw ``lightgbm.Booster`` requires an exact-contents, exact-order match
+        (the sklearn wrapper used to reindex silently by ``feature_name_`` —
+        the Booster does not). ``DataFrame.reindex`` is the canonical pandas
+        idiom for «project to this column set»: it drops extras, orders to
+        ``feature_names``, and fills any genuinely missing columns with NaN
+        (LightGBM handles missing values natively). Crucially, existing
+        columns retain their dtype — including ``category`` — because reindex
+        only allocates new storage for freshly-created columns.
+        """
+        if not feature_names:
+            return features
+
+        missing = [c for c in feature_names if c not in features.columns]
+        if missing:
+            # Compact prefix histogram — more useful than the first 5 names
+            # when the gap is a consistent group like "*_lag_*" or "*_share".
+            from collections import Counter
+
+            prefixes = Counter(c.split("_", 1)[0] for c in missing)
+            logger.warning(
+                "Feature DataFrame is missing %d expected columns by prefix: %s",
+                len(missing),
+                dict(prefixes.most_common(8)),
+            )
+
+        return features.reindex(columns=feature_names)
 
     def _mock_predict(self, features: pd.DataFrame) -> np.ndarray:
         """Generate realistic synthetic predictions for local development.
@@ -152,6 +256,7 @@ class ModelManager:
         self._shadow_model = joblib.load(shadow_path)
         self._shadow_path = str(shadow_path.resolve())
         self._shadow_version = shadow_path.stem
+        self._shadow_feature_names = _introspect_lgb(self._shadow_model)["feature_names"]
 
         metadata_path = shadow_path.with_name(shadow_path.stem + "_metadata.json")
         if metadata_path.exists():
@@ -167,7 +272,8 @@ class ModelManager:
         if self._shadow_model is None:
             return None
         try:
-            raw = self._shadow_model.predict(features)
+            aligned = self._align_features(features, self._shadow_feature_names)
+            raw = self._shadow_model.predict(aligned)
             return np.clip(raw, 0, None)
         except Exception:
             logger.exception("Shadow model prediction failed")
@@ -188,10 +294,12 @@ class ModelManager:
         self._model = self._shadow_model
         self._metadata = self._shadow_metadata
         self._model_path = self._shadow_path
+        self._feature_names = self._shadow_feature_names
         self._shadow_model = None
         self._shadow_metadata = {}
         self._shadow_path = None
         self._shadow_version = None
+        self._shadow_feature_names = []
         logger.info("Shadow model promoted to primary")
 
     def remove_shadow(self) -> None:
@@ -200,6 +308,7 @@ class ModelManager:
         self._shadow_metadata = {}
         self._shadow_path = None
         self._shadow_version = None
+        self._shadow_feature_names = []
         logger.info("Shadow model removed")
 
     def info(self) -> dict[str, Any]:
@@ -219,17 +328,17 @@ class ModelManager:
         if self._model is None:
             raise RuntimeError("Model is not loaded. Call load() first.")
 
-        booster = self._model.booster_
-        params = booster.params if hasattr(booster, "params") else {}
+        intro = _introspect_lgb(self._model)
+        params = intro["params"]
 
         return {
             "model_path": self._model_path,
-            "model_type": "LGBMRegressor",
+            "model_type": type(self._model).__name__,
             "objective": params.get("objective", self._metadata.get("objective", "unknown")),
             "cv_score": self._metadata.get("cv_score"),
-            "feature_count": self._model.n_features_,
-            "feature_names": list(self._model.feature_name_),
-            "n_estimators_fitted": self._model.n_estimators_,
+            "feature_count": intro["n_features"],
+            "feature_names": intro["feature_names"],
+            "n_estimators_fitted": intro["n_estimators"],
             "training_date": self._metadata.get("training_date"),
             **{k: v for k, v in self._metadata.items() if k not in ("cv_score", "training_date", "objective")},
         }
