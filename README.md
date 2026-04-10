@@ -37,7 +37,7 @@
 
 | Требование | Как закрыто в проекте |
 | --- | --- |
-| Предсказательная модель на тренировочных данных | LightGBM-модель в `models/model.pkl` и retraining pipeline в `services/retraining-service` |
+| Предсказательная модель на тренировочных данных | LightGBM Hybrid (6 субмоделей) в `models/model.pkl` и retraining pipeline в `services/retraining-service` |
 | Веб-сервис или связка веб-сервисов | 4 FastAPI-сервиса + Next.js dashboard + PostgreSQL |
 | Логика работы с прогнозом | Scheduler каждые 30 минут запускает полный цикл и сохраняет прогнозы/заявки в БД |
 | Оценка качества | Онлайн `quality_check`, offline baseline, бизнес-KPI `order_accuracy` и `avg_truck_utilization` |
@@ -137,8 +137,7 @@ graph LR
 - lag-фичи по `status_1..8` и `target_2h`;
 - diff-фичи по статусам и inventory-признакам;
 - rolling mean / rolling sum;
-- статические профили маршрутов и складов из `static_aggs.json`;
-- fill-values из `fill_values.json`;
+- kaggle-фичи через `team_pipeline.kaggle_features`;
 - cold-start fallback через среднюю историю по складу;
 - snap к каноническим 30-минутным слотам;
 - backfill фактических `target_2h` и фактических параметров заявок.
@@ -147,41 +146,30 @@ graph LR
 
 ### Текущий production-compatible артефакт
 
-В репозитории лежит совместимый с runtime bundle в `final_submissions/production_team_model/models/`.
-Артефакты модели (`model.pkl`, `static_aggs.json`) хранятся в Git LFS, поэтому на новой машине перед первым запуском нужно сначала подтянуть LFS-объекты, а затем скопировать bundle в runtime-каталог `models/`:
+В репозитории лежит hybrid LightGBM bundle в `models/` (отслеживается через Git LFS). На новой машине перед первым запуском нужно подтянуть LFS-объекты:
 
 ```bash
 git lfs install
 git lfs pull
-
-cp final_submissions/production_team_model/models/model.pkl models/model.pkl
-cp final_submissions/production_team_model/models/static_aggs.json models/static_aggs.json
-cp final_submissions/production_team_model/models/fill_values.json models/fill_values.json
-cp final_submissions/production_team_model/models/v20260408_051606_metadata.json models/model_metadata.json
 ```
 
-После копирования runtime использует:
+Runtime использует:
 
-- файл: `models/model.pkl`
-- metadata: `models/model_metadata.json`
-- версия: `v20260408_051606`
+- `models/model.pkl` — hybrid envelope с 6 субмоделями (step_1..5 + global_6_10)
+- `models/model_metadata.json` — версия и метрики артефакта
 
-Метрики этого артефакта по metadata:
+Метрики артефакта:
 
 | Параметр | Значение |
 | --- | --- |
-| Алгоритм | LightGBM Regressor |
+| Алгоритм | LightGBM Hybrid (6 субмоделей) |
 | Objective | `regression_l1` |
-| Combined score | `0.008289` |
-| WAPE | `0.00808` |
-| RBias | `0.00021` |
-| Число признаков | `312` |
-| Train rows | `1,431,000` |
-| Validation rows | `10,000` |
-| Training window | `30` дней |
+| Субмодели | step_1..5 (per-horizon) + global_6_10 |
+| Фичи | team_pipeline DatasetBuilder + kaggle_features |
 
-### Почему LightGBM
+### Почему LightGBM Hybrid
 
+- **hybrid-архитектура**: отдельные модели для ближних шагов (1-5) и общая модель для дальних (6-10) повышают точность на разных горизонтах;
 - хорошо работает на табличных временных данных после feature engineering;
 - быстрый inference для онлайнового сервиса;
 - легко переобучается и деплоится;
@@ -331,6 +319,7 @@ Judge-flow использует `Data/raw/train_team_track.parquet`:
 ```bash
 git clone https://github.com/kxddry/WildHack
 cd WildHack
+git lfs install && git lfs pull
 make judge-up
 ```
 
@@ -366,12 +355,12 @@ docker compose -f infrastructure/docker-compose.yml up --build
 
 Для локального ноутбука можно оставить demo-значения из шаблона, но для любого общего окружения токены нужно заменить.
 
-Перед первым `make up` или `docker compose up` убедитесь, что в корневом `models/` уже лежат `model.pkl`, `static_aggs.json`, `fill_values.json` из bundle `final_submissions/production_team_model/models/` и что Git LFS-артефакты были скачаны.
+Перед первым `make up` или `docker compose up` убедитесь, что Git LFS-артефакты были скачаны (`git lfs pull`) и в корневом `models/` лежит `model.pkl`.
 
 Поведение `prediction-service` при старте:
 
-- по умолчанию сервис работает в **fail-fast** режиме и требует `models/model.pkl`, `models/static_aggs.json`, `models/fill_values.json`;
-- если артефактов нет, можно включить локальный fallback через `MOCK_MODE=1`, но этот режим предназначен только для разработки.
+- по умолчанию сервис работает в **fail-fast** режиме и требует `models/model.pkl`;
+- если артефакта нет, можно включить локальный fallback через `MOCK_MODE=1`, но этот режим предназначен только для разработки.
 
 ### Вариант 3: локальная разработка на хосте
 
