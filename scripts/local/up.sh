@@ -9,6 +9,13 @@
 
 . "$(dirname "$0")/_common.sh"
 
+# Load .env for tokens and overrides
+if [ -f "$REPO_ROOT/.env" ]; then
+  set -a
+  . "$REPO_ROOT/.env"
+  set +a
+fi
+
 # Service URLs as seen from the host. The docker-compose wiring gives each
 # service a hostname like `prediction-service`; on bare metal those do not
 # resolve, so every downstream service MUST receive the localhost equivalents
@@ -52,9 +59,8 @@ start_python() {
     DISPATCHER_SERVICE_URL="$DISP_URL" \
     RETRAINING_SERVICE_URL="$RETRAIN_URL" \
     MODEL_PATH="$REPO_ROOT/models/model.pkl" \
-    STATIC_AGGS_PATH="$REPO_ROOT/models/static_aggs.json" \
-    FILL_VALUES_PATH="$REPO_ROOT/models/fill_values.json" \
     MODEL_OUTPUT_DIR="$REPO_ROOT/models" \
+    PYTHONPATH="$REPO_ROOT/shared:${PYTHONPATH:-}" \
     MOCK_MODE="${MOCK_MODE:-0}" \
     TRUCK_CAPACITY="${TRUCK_CAPACITY:-33}" \
     BUFFER_PCT="${BUFFER_PCT:-0.10}" \
@@ -65,6 +71,8 @@ start_python() {
     PREDICTION_INTERVAL_MINUTES="${PREDICTION_INTERVAL_MINUTES:-30}" \
     QUALITY_CHECK_INTERVAL_MINUTES="${QUALITY_CHECK_INTERVAL_MINUTES:-60}" \
     TRAINING_WINDOW_DAYS="${TRAINING_WINDOW_DAYS:-7}" \
+    INTERNAL_API_TOKEN="${INTERNAL_API_TOKEN:-}" \
+    DATA_INGEST_TOKEN="${DATA_INGEST_TOKEN:-}" \
     PYTHONUNBUFFERED=1 \
     nohup "$venv/bin/uvicorn" "app.main:app" \
       --host 127.0.0.1 --port "$port" \

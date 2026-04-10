@@ -23,7 +23,7 @@ import {
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
 import { KpiCard } from "@/components/kpi-card";
-import { TOOLTIP_STYLE, AXIS_STYLE, CHART_COLORS } from "@/lib/chart-theme";
+import { TOOLTIP_STYLE, TOOLTIP_LABEL_STYLE, TOOLTIP_ITEM_STYLE, AXIS_STYLE, CHART_COLORS } from "@/lib/chart-theme";
 import type {
   Warehouse,
   RouteStatusHistory,
@@ -377,7 +377,7 @@ export default function QualityPage() {
                       tick={{ fill: AXIS_STYLE.fill, fontSize: 11 }}
                       allowDecimals={false}
                     />
-                    <Tooltip contentStyle={TOOLTIP_STYLE} />
+                    <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} itemStyle={TOOLTIP_ITEM_STYLE} />
                     <Legend
                       wrapperStyle={{ fontSize: 11, color: AXIS_STYLE.fill }}
                     />

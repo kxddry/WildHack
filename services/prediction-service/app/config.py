@@ -19,11 +19,8 @@ class Settings(BaseSettings):
     history_window: int = 288  # 288 * 30min = 6 days of history
     forecast_steps: int = 10  # 10 steps * 30min = 5 hours ahead
     step_interval_minutes: int = 30
-    static_aggs_path: str = "models/static_aggs.json"
-    fill_values_path: str = "models/fill_values.json"
-
     # Shared internal secret — required on model control routes (/model/reload,
-    # /model/reload-features, /model/shadow/*). Callers send it as
+    # /model/shadow/*). Callers send it as
     # ``X-Internal-Token``. Empty string means the service is mis-configured
     # and the token dependency fails closed with 503.
     internal_api_token: str = ""

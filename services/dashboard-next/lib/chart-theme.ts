@@ -5,6 +5,14 @@ export const TOOLTIP_STYLE: React.CSSProperties = {
   color: "var(--color-foreground)",
 };
 
+export const TOOLTIP_LABEL_STYLE: React.CSSProperties = {
+  color: "var(--color-foreground)",
+};
+
+export const TOOLTIP_ITEM_STYLE: React.CSSProperties = {
+  color: "var(--color-muted-foreground)",
+};
+
 export const AXIS_STYLE = {
   stroke: "var(--color-border)",
   fontSize: 12,

@@ -24,14 +24,6 @@ def _seed(tmp_path: Path, version: str, metadata: dict | None) -> Path:
     return artifact
 
 
-def _seed_feature_artifacts(tmp_path: Path, version: str) -> None:
-    (tmp_path / f"{version}_static_aggs.json").write_text(
-        json.dumps({"route_id": [{"route_id": 10, "status_1_mean": 1.0}]})
-    )
-    (tmp_path / f"{version}_fill_values.json").write_text(
-        json.dumps({"target_2h_lag_1": 3.14})
-    )
-
 
 def test_copy_canonical_pair_writes_both_files(tmp_path):
     version = "v20250408_120000"
@@ -85,21 +77,3 @@ def test_copy_canonical_pair_is_idempotent(tmp_path):
     assert json.loads(canonical_metadata.read_text())["model_version"] == version
 
 
-def test_copy_versioned_feature_artifacts_updates_canonical_paths(tmp_path):
-    version = "v20250408_150000"
-    artifact = _seed(tmp_path, version, {"model_version": version})
-    _seed_feature_artifacts(tmp_path, version)
-
-    result = ModelRegistry._copy_versioned_feature_artifacts(str(artifact))
-
-    canonical_static = tmp_path / settings.canonical_static_aggs_filename
-    canonical_fill = tmp_path / settings.canonical_fill_values_filename
-
-    assert canonical_static.exists()
-    assert canonical_fill.exists()
-    assert json.loads(canonical_static.read_text())["route_id"][0]["route_id"] == 10
-    assert json.loads(canonical_fill.read_text())["target_2h_lag_1"] == 3.14
-    assert result == {
-        "static_aggs": str(canonical_static),
-        "fill_values": str(canonical_fill),
-    }

@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     prediction_interval_minutes: int = 30
     quality_check_interval_minutes: int = 60
     step_interval_minutes: int = 30
+    retrain_interval_hours: int = 24
 
     # Pipeline config
     batch_size: int = 50  # routes per batch call

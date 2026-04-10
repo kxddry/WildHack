@@ -103,7 +103,8 @@ services:
 
   prediction-service:
     build:
-      context: ../services/prediction-service
+      context: ..
+      dockerfile: services/prediction-service/Dockerfile
     image: wildhack/prediction-service:dev
     env_file:
       - ../.env
@@ -116,9 +117,7 @@ services:
       # and comes from .env only — do NOT redeclare it here or the env_file
       # value becomes unreachable.
       MODEL_PATH: /app/models/model.pkl
-      STATIC_AGGS_PATH: /app/models/static_aggs.json
-      FILL_VALUES_PATH: /app/models/fill_values.json
-      # Shared internal secret — required on /model/reload, /model/reload-features,
+      # Shared internal secret — required on /model/reload,
       # /model/shadow/*. No default: missing env → the service boots and every
       # protected route fails closed with 503 until ops supplies the value.
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
@@ -261,7 +260,8 @@ services:
 
   retraining-service:
     build:
-      context: ../services/retraining-service
+      context: ..
+      dockerfile: services/retraining-service/Dockerfile
     image: wildhack/retraining-service:dev
     env_file:
       - ../.env

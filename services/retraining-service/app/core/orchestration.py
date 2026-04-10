@@ -90,12 +90,10 @@ async def run_retrain_cycle(
 
     Steps (same as the legacy ``/retrain`` handler, now shared):
       1. Fetch training data from ``route_status_history``.
-      2. Build features via ``ModelTrainer.build_features``.
-      3. Train LightGBM on the OOT split.
+      2-3. Build features + train hybrid via ``ModelTrainer.train_from_dataframe``.
       4. Save the artifact + metadata JSON to ``settings.model_output_dir``.
-      5. Recompute static aggregations / fill values from the fresh data.
-      6. Register the challenger in ``model_metadata``.
-      7. Apply the promotion policy.
+      5. Register the challenger in ``model_metadata``.
+      6. Apply the promotion policy.
 
     The trainer.save_model path is stamped with an ISO-compact version
     string so each run produces a distinct artifact on disk that survives
@@ -125,42 +123,17 @@ async def run_retrain_cycle(
         None, trainer.fetch_training_data, window, reference_ts
     )
 
-    # 2. Build features
-    features_df = await loop.run_in_executor(None, trainer.build_features, raw_df)
-
-    # 3. Train
-    model, metrics = await loop.run_in_executor(
-        None, trainer.train_model, features_df
+    # 2-3. Build features + train hybrid (combined in train_from_dataframe)
+    envelope, metrics = await loop.run_in_executor(
+        None, trainer.train_from_dataframe, raw_df
     )
 
     # 4. Save artifact + metadata JSON
     model_path = await loop.run_in_executor(
-        None, trainer.save_model, model, version, metrics
+        None, trainer.save_model, envelope, version, metrics
     )
 
-    # 5. Recompute static aggs — keep inference features in sync with the
-    #    fresh training distribution. Non-fatal: a failure here means
-    #    predictions stay on the previous aggregation table, not silent
-    #    corruption.
-    artifact_paths: dict[str, Any] = {}
-    evaluation_ready = False
-    try:
-        artifact_paths = await loop.run_in_executor(
-            None,
-            trainer.save_static_aggs,
-            raw_df,
-            features_df,
-            settings.model_output_dir,
-            version,
-        )
-    except Exception:
-        logger.exception(
-            "Failed to save static aggs — retrain continues without update"
-        )
-    else:
-        evaluation_ready = True
-
-    # 6. Register challenger
+    # 5. Register challenger
     champion = await registry.get_champion()
     challenger_score = metrics["combined_score"]
     is_better = True
@@ -186,14 +159,9 @@ async def run_retrain_cycle(
         "num_leaves": settings.num_leaves,
         "max_depth": settings.max_depth,
         "min_child_samples": settings.min_child_samples,
-        "best_iteration": metrics.get("best_iteration"),
         "wape": metrics.get("wape"),
         "rbias": metrics.get("rbias"),
-        "evaluation_ready": evaluation_ready,
-        "static_aggs_path": artifact_paths.get("static_aggs_path"),
-        "fill_values_path": artifact_paths.get("fill_values_path"),
-        "canonical_static_aggs_path": artifact_paths.get("canonical_static_aggs_path"),
-        "canonical_fill_values_path": artifact_paths.get("canonical_fill_values_path"),
+        "submodels": metrics.get("submodels"),
     }
     await registry.register_model(
         version=version,
@@ -203,7 +171,7 @@ async def run_retrain_cycle(
         config=config,
     )
 
-    # 7. Apply promotion policy.
+    # 6. Apply promotion policy.
     pending = _apply_policy(policy, is_better)
     promotion_status = await _execute_promotion(registry, model_path, pending)
 

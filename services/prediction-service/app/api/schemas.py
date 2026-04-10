@@ -60,6 +60,8 @@ class ModelInfoResponse(BaseModel):
     objective: str
     cv_score: float | None = None
     feature_count: int
+    feature_names: list[str] | None = None
     training_date: str | None = None
     forecast_horizon: int = Field(description="Number of forecast steps")
     step_interval_minutes: int = Field(description="Minutes between each step")
+    submodels: dict[str, dict] | None = None

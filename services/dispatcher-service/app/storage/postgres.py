@@ -282,12 +282,12 @@ async def get_recent_forecasts(
     async with engine.connect() as conn:
         result = await conn.execute(
             text(
-                "SELECT route_id, anchor_ts, forecasts "
+                "SELECT DISTINCT ON (route_id) route_id, anchor_ts, forecasts "
                 "FROM forecasts "
                 "WHERE warehouse_id = :warehouse_id "
                 "AND anchor_ts >= :anchor_floor "
                 "AND anchor_ts <  :window_end "
-                "ORDER BY anchor_ts"
+                "ORDER BY route_id, anchor_ts DESC"
             ),
             {
                 "warehouse_id": warehouse_id,
@@ -373,6 +373,7 @@ async def get_all_warehouses() -> list[dict]:
                 "    SELECT warehouse_id, COALESCE(SUM(trucks_needed), 0) AS upcoming_trucks "
                 "    FROM transport_requests "
                 "    WHERE status IN ('planned', 'dispatched') "
+                "      AND time_slot_start >= NOW() "
                 "    GROUP BY warehouse_id"
                 ") ts ON ts.warehouse_id = w.warehouse_id "
                 "ORDER BY w.warehouse_id"

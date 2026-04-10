@@ -14,6 +14,7 @@ from app.config import settings
 from app.core.backfill import BackfillRunner
 from app.core.pipeline import PipelineOrchestrator
 from app.core.quality import QualityChecker
+from app.core.retrain import RetrainOrchestrator
 from app.storage import postgres as db_module
 from app.storage.postgres import close_engine, create_engine_pool
 
@@ -40,6 +41,10 @@ async def lifespan(app: FastAPI):
     quality_checker._retrain_url = settings.retraining_service_url
     quality_checker._promote_threshold = settings.shadow_promote_streak_threshold
     backfill_runner = BackfillRunner()
+    retrain_orchestrator = RetrainOrchestrator()
+    retrain_orchestrator._http_client = http_client
+    retrain_orchestrator._retrain_url = settings.retraining_service_url
+    retrain_orchestrator._internal_token = settings.internal_api_token
 
     # Attach to app state so routes can access them
     app.state.db = db_module
@@ -80,13 +85,20 @@ async def lifespan(app: FastAPI):
         id="backfill_target_2h",
         replace_existing=True,
     )
+    scheduler.add_job(
+        retrain_orchestrator.run_retrain_tick,
+        "interval",
+        hours=settings.retrain_interval_hours,
+        id="retrain",
+    )
     scheduler.start()
     app.state.scheduler = scheduler
 
     logger.info(
-        "Scheduler service ready — prediction every %d min, quality check every %d min, backfill every 30 min",
+        "Scheduler service ready — prediction every %d min, quality check every %d min, retrain every %d h",
         settings.prediction_interval_minutes,
         settings.quality_check_interval_minutes,
+        settings.retrain_interval_hours,
     )
     yield
 

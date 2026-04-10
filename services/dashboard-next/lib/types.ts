@@ -61,6 +61,7 @@ export interface ModelInfo {
   training_date: string | null;
   forecast_horizon: number;
   step_interval_minutes: number;
+  submodels?: Record<string, { n_features: number; n_estimators: number; best_iteration?: number }>;
 }
 
 export interface ModelRegistryEntry {
@@ -112,31 +113,6 @@ export interface QualityAlert {
   threshold: number;
   message: string;
   timestamp: string;
-}
-
-export interface TeamTrackPreviewRow {
-  id: number;
-  route_id: number;
-  timestamp: string;
-  raw_forecast: number;
-  y_pred: number;
-}
-
-export interface TeamTrackPreviewResponse {
-  row_count: number;
-  route_count: number;
-  preview_count: number;
-  model: {
-    selected_version: string | null;
-    resolved_version: string;
-    source: string;
-    model_path: string;
-    static_aggs_path: string;
-    fill_values_path: string;
-    feature_count: number;
-    evaluation_ready: boolean;
-  };
-  preview: TeamTrackPreviewRow[];
 }
 
 export type CheckStatus = "pass" | "warn" | "fail";
