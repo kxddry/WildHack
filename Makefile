@@ -49,6 +49,9 @@ db-reset: ## Drop postgres volume + re-apply schema (DESTROYS data)
 up: ## Start the 4 FastAPI services + Next.js dashboard on the host
 	@$(SCRIPTS)/up.sh
 
+fill: ## Seed data + run pipeline locally (like judge-up but without Docker)
+	@$(SCRIPTS)/fill.sh
+
 down: ## Stop everything started by `make up`
 	@$(SCRIPTS)/down.sh
 

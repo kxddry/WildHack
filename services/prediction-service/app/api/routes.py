@@ -20,7 +20,6 @@ from app.api.schemas import (
 )
 from app.api.security import require_internal_token
 from app.config import settings
-from app.core.feature_engine import InferenceFeatureEngine
 from app.storage import postgres
 
 logger = logging.getLogger(__name__)
@@ -32,8 +31,6 @@ router = APIRouter()
 # ``/api/v1`` for backward compatibility). Prevents paths like
 # ``/api/v1/api/v1/forecasts``.
 router_v1 = APIRouter()
-
-feature_engine = InferenceFeatureEngine()
 
 COLD_START_THRESHOLD = 24  # minimum 12 hours of history needed
 
@@ -117,13 +114,19 @@ async def _run_single_prediction(request: Request, req: PredictRequest) -> Predi
         new_row_df = pd.DataFrame([current_row])
         full_history = pd.concat([history_df, new_row_df], ignore_index=True)
 
-    # 4. Build features via InferenceFeatureEngine
-    features_df = feature_engine.build_features(
-        history_df=full_history,
-        route_id=req.route_id,
-        warehouse_id=warehouse_id,
-        forecast_steps=settings.forecast_steps,
-    )
+    # 4. Build features via TeamHybridFeaturizer (skipped in mock mode)
+    featurizer = request.app.state.featurizer
+    if featurizer is not None:
+        features_df = featurizer.build(
+            history_df=full_history,
+            anchor_ts=req.timestamp,
+            route_id=req.route_id,
+            warehouse_id=warehouse_id,
+            forecast_steps=settings.forecast_steps,
+        )
+    else:
+        # Mock mode — build a minimal DataFrame for _mock_predict
+        features_df = full_history.tail(1).copy()
 
     # 5a. Run primary model prediction
     predictions = model_manager.predict(features_df)
@@ -304,38 +307,6 @@ async def reload_model(request: Request) -> dict:
         return {"status": "reloaded", "details": result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Model reload failed: {e}")
-
-
-@router.post(
-    "/model/reload-features",
-    dependencies=[Depends(require_internal_token)],
-)
-async def reload_features() -> dict:
-    """Reload static aggregations and fill values from disk.
-
-    Called by the retraining service after a new model is promoted to primary,
-    ensuring inference features stay in sync with the latest training statistics.
-    Protected with X-Internal-Token.
-    """
-    reloaded: list[str] = []
-    errors: list[str] = []
-
-    try:
-        feature_engine.load_static_aggregations(settings.static_aggs_path)
-        reloaded.append("static_aggs")
-    except Exception as exc:
-        errors.append(f"static_aggs: {exc}")
-
-    try:
-        feature_engine.load_fill_values(settings.fill_values_path)
-        reloaded.append("fill_values")
-    except Exception as exc:
-        errors.append(f"fill_values: {exc}")
-
-    if errors and not reloaded:
-        raise HTTPException(status_code=500, detail=f"Feature reload failed: {errors}")
-
-    return {"status": "reloaded", "reloaded": reloaded, "errors": errors}
 
 
 @router.post(

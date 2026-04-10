@@ -125,55 +125,6 @@ class ModelRegistry:
             )
         return result
 
-    @staticmethod
-    def _copy_versioned_feature_artifacts(model_path: str) -> dict[str, str]:
-        """Copy versioned static-aggs/fill-values files onto canonical names.
-
-        Old registry entries do not have versioned inference artifacts. That is
-        not fatal for promote/shadow workflows, but it does mean the version is
-        unavailable for isolated team-track evaluation.
-        """
-        result: dict[str, str] = {}
-        src_model = Path(model_path)
-        version = src_model.stem
-        output_dir = src_model.parent
-
-        copies = (
-            (
-                output_dir / f"{version}_static_aggs.json",
-                output_dir / settings.canonical_static_aggs_filename,
-                "static_aggs",
-            ),
-            (
-                output_dir / f"{version}_fill_values.json",
-                output_dir / settings.canonical_fill_values_filename,
-                "fill_values",
-            ),
-        )
-
-        for src, dst, key in copies:
-            if not src.exists():
-                logger.info(
-                    "Versioned feature artifact %s not found for %s; leaving canonical %s in place",
-                    src.name,
-                    version,
-                    dst.name,
-                )
-                continue
-            try:
-                tmp = dst.with_suffix(dst.suffix + ".tmp")
-                shutil.copy2(src, tmp)
-                os.replace(tmp, dst)
-                result[key] = str(dst)
-            except Exception:
-                logger.exception(
-                    "Failed to copy %s to canonical path %s",
-                    src,
-                    dst,
-                )
-
-        return result
-
     async def promote_to_primary(self, model_path: str) -> dict:
         """Promote a model to primary in the prediction service.
 
@@ -181,8 +132,6 @@ class ModelRegistry:
         1. Tell prediction-service to swap the in-memory shadow → primary.
         2. Copy artifact + metadata JSON to canonical paths atomically
            so a restart loads the same pair.
-        3. Reload static aggregations so inference features stay in sync
-           with the promoted model's training distribution.
         """
         resp = await self._client.post(
             f"{self._prediction_url}/model/shadow/promote",
@@ -194,26 +143,6 @@ class ModelRegistry:
 
         copy_result = self._copy_canonical_pair(model_path)
         result["canonical_copy"] = copy_result
-        result["canonical_feature_artifacts"] = self._copy_versioned_feature_artifacts(
-            model_path
-        )
-
-        # Reload static aggregations in prediction-service so feature statistics
-        # match the newly promoted model's training distribution.
-        try:
-            reload_resp = await self._client.post(
-                f"{self._prediction_url}/model/reload-features",
-                headers=self._internal_headers(),
-                timeout=30.0,
-            )
-            if reload_resp.status_code == 200:
-                logger.info("Feature aggregations reloaded in prediction-service")
-            else:
-                logger.warning(
-                    "Feature reload returned %d: %s", reload_resp.status_code, reload_resp.text
-                )
-        except Exception:
-            logger.exception("Failed to reload features — predictions will use previous agg stats")
 
         return result
 

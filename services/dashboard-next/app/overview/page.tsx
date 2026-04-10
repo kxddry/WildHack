@@ -15,8 +15,6 @@ import {
   Route,
   Truck,
   Database,
-  Target,
-  Gauge,
   AlertTriangle,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -31,13 +29,11 @@ import {
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
 import { KpiCard } from "@/components/kpi-card";
-import { TOOLTIP_STYLE, AXIS_STYLE, CHART_COLORS } from "@/lib/chart-theme";
-import type { BusinessMetrics, Warehouse } from "@/lib/types";
+import { TOOLTIP_STYLE, TOOLTIP_LABEL_STYLE, TOOLTIP_ITEM_STYLE, AXIS_STYLE, CHART_COLORS } from "@/lib/chart-theme";
+import type { Warehouse } from "@/lib/types";
 
 export default function OverviewPage() {
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
-  const [metrics, setMetrics] = useState<BusinessMetrics | null>(null);
-  const [metricsError, setMetricsError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -50,16 +46,6 @@ export default function OverviewPage() {
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
-
-    fetch("/api/metrics/business")
-      .then((r) => r.json())
-      .then((data) => {
-        if (data.error) throw new Error(data.error);
-        setMetrics(data as BusinessMetrics);
-      })
-      .catch((e) =>
-        setMetricsError(e instanceof Error ? e.message : "Метрики недоступны")
-      );
   }, []);
 
   const totalRoutes = warehouses.reduce(
@@ -142,63 +128,6 @@ export default function OverviewPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Бизнес-показатели (PRD §9.2)</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {metricsError ? (
-            <Alert variant="destructive">
-              <AlertTriangle />
-              <AlertTitle>Метрики недоступны</AlertTitle>
-              <AlertDescription>{metricsError}</AlertDescription>
-            </Alert>
-          ) : metrics === null ? (
-            <div className="space-y-2">
-              <Skeleton className="h-4 w-32" />
-              <Skeleton className="h-4 w-48" />
-            </div>
-          ) : (
-            <div className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <KpiCard
-                  title="Точность заказа (±2 грузовика)"
-                  value={
-                    metrics.n_slots_evaluated > 0
-                      ? `${(metrics.order_accuracy * 100).toFixed(1)}%`
-                      : "—"
-                  }
-                  subtitle={`${metrics.n_slots_evaluated} из ${metrics.n_slots_total} слотов оценено`}
-                  icon={Target}
-                />
-                <KpiCard
-                  title="Средняя загрузка грузовиков"
-                  value={
-                    metrics.n_slots_evaluated > 0
-                      ? `${(metrics.avg_truck_utilization * 100).toFixed(1)}%`
-                      : "—"
-                  }
-                  subtitle={
-                    metrics.truck_capacity > 0
-                      ? `вместимость = ${metrics.truck_capacity} ед. / грузовик`
-                      : "данных по исполнению пока нет"
-                  }
-                  icon={Gauge}
-                />
-              </div>
-              {metrics.n_slots_evaluated > 0 && (
-                <p className="text-xs text-muted-foreground">
-                  Демонстрационные значения рассчитываются по окну историй повторного проигрывания и сохраняют формулу KPI из PRD без изменений.
-                </p>
-              )}
-              {metrics.note && (
-                <p className="text-xs text-muted-foreground">{metrics.note}</p>
-              )}
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
           <CardTitle>Загрузка складов (маршрутов на склад)</CardTitle>
         </CardHeader>
         <CardContent>
@@ -207,7 +136,7 @@ export default function OverviewPage() {
               <CartesianGrid strokeDasharray="3 3" stroke={AXIS_STYLE.stroke} />
               <XAxis dataKey="id" tick={{ fill: AXIS_STYLE.fill, fontSize: AXIS_STYLE.fontSize }} />
               <YAxis tick={{ fill: AXIS_STYLE.fill, fontSize: AXIS_STYLE.fontSize }} allowDecimals={false} />
-              <Tooltip contentStyle={TOOLTIP_STYLE} />
+              <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} itemStyle={TOOLTIP_ITEM_STYLE} />
               <Bar dataKey="routes" fill={CHART_COLORS[0]} radius={[4, 4, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>

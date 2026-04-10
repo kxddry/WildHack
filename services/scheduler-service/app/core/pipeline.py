@@ -57,100 +57,100 @@ class PipelineOrchestrator:
                     {"step": "fetch_routes", "status": "skip", "detail": "No active routes"}
                 )
                 self._last_status = "no_routes"
-                return result
-
-            route_ids = [r["route_id"] for r in routes]
-            statuses = await from_db.get_latest_statuses(route_ids, as_of=anchor_ts)
-            result["steps"].append(
-                {
-                    "step": "fetch_statuses",
-                    "status": "ok",
-                    "anchor_ts": anchor_ts.isoformat(),
-                    "routes_found": len(routes),
-                    "statuses_found": len(statuses),
-                }
-            )
-
-            # Step 2: Build batch prediction request
-            predictions = [
-                {
-                    "route_id": row["route_id"],
-                    "timestamp": anchor_ts.isoformat(),
-                    "status_1": row.get("status_1", 0.0),
-                    "status_2": row.get("status_2", 0.0),
-                    "status_3": row.get("status_3", 0.0),
-                    "status_4": row.get("status_4", 0.0),
-                    "status_5": row.get("status_5", 0.0),
-                    "status_6": row.get("status_6", 0.0),
-                    "status_7": row.get("status_7", 0.0),
-                    "status_8": row.get("status_8", 0.0),
-                }
-                for row in statuses
-            ]
-
-            # Step 3: Send batch prediction (in chunks)
-            total_predicted = 0
-            batch_size = settings.batch_size
-            for i in range(0, len(predictions), batch_size):
-                chunk = predictions[i : i + batch_size]
-                resp = await self._client.post(
-                    f"{settings.prediction_service_url}/predict/batch",
-                    json={"predictions": chunk},
-                    timeout=120.0,
+                result["status"] = "no_routes"
+            else:
+                route_ids = [r["route_id"] for r in routes]
+                statuses = await from_db.get_latest_statuses(route_ids, as_of=anchor_ts)
+                result["steps"].append(
+                    {
+                        "step": "fetch_statuses",
+                        "status": "ok",
+                        "anchor_ts": anchor_ts.isoformat(),
+                        "routes_found": len(routes),
+                        "statuses_found": len(statuses),
+                    }
                 )
-                resp.raise_for_status()
-                batch_result = resp.json()
-                total_predicted += batch_result.get("total", 0)
 
-            result["steps"].append(
-                {
-                    "step": "batch_predict",
-                    "status": "ok",
-                    "routes_submitted": len(predictions),
-                    "routes_predicted": total_predicted,
-                }
-            )
+                # Step 2: Build batch prediction request
+                predictions = [
+                    {
+                        "route_id": row["route_id"],
+                        "timestamp": anchor_ts.isoformat(),
+                        "status_1": row.get("status_1", 0.0),
+                        "status_2": row.get("status_2", 0.0),
+                        "status_3": row.get("status_3", 0.0),
+                        "status_4": row.get("status_4", 0.0),
+                        "status_5": row.get("status_5", 0.0),
+                        "status_6": row.get("status_6", 0.0),
+                        "status_7": row.get("status_7", 0.0),
+                        "status_8": row.get("status_8", 0.0),
+                    }
+                    for row in statuses
+                ]
 
-            # Step 4: Auto-dispatch for each warehouse
-            warehouses = await from_db.get_distinct_warehouses()
-            dispatch_count = 0
-            time_range_start = anchor_ts
-            time_range_end = anchor_ts + timedelta(hours=settings.forecast_hours_ahead)
-
-            for wh_id in warehouses:
-                try:
+                # Step 3: Send batch prediction (in chunks)
+                total_predicted = 0
+                batch_size = settings.batch_size
+                for i in range(0, len(predictions), batch_size):
+                    chunk = predictions[i : i + batch_size]
                     resp = await self._client.post(
-                        f"{settings.dispatcher_service_url}/dispatch",
-                        json={
-                            "warehouse_id": wh_id,
-                            "time_range_start": time_range_start.isoformat(),
-                            "time_range_end": time_range_end.isoformat(),
-                        },
-                        timeout=30.0,
+                        f"{settings.prediction_service_url}/predict/batch",
+                        json={"predictions": chunk},
+                        timeout=120.0,
                     )
-                    if resp.status_code == 200:
-                        dispatch_count += 1
-                    elif resp.status_code == 404:
-                        pass  # No forecasts yet for this warehouse
-                    else:
-                        logger.warning(
-                            "Dispatch failed for warehouse %d: %s", wh_id, resp.text
+                    resp.raise_for_status()
+                    batch_result = resp.json()
+                    total_predicted += batch_result.get("total", 0)
+
+                result["steps"].append(
+                    {
+                        "step": "batch_predict",
+                        "status": "ok",
+                        "routes_submitted": len(predictions),
+                        "routes_predicted": total_predicted,
+                    }
+                )
+
+                # Step 4: Auto-dispatch for each warehouse
+                warehouses = await from_db.get_distinct_warehouses()
+                dispatch_count = 0
+                time_range_start = anchor_ts
+                time_range_end = anchor_ts + timedelta(hours=settings.forecast_hours_ahead)
+
+                for wh_id in warehouses:
+                    try:
+                        resp = await self._client.post(
+                            f"{settings.dispatcher_service_url}/dispatch",
+                            json={
+                                "warehouse_id": wh_id,
+                                "time_range_start": time_range_start.isoformat(),
+                                "time_range_end": time_range_end.isoformat(),
+                            },
+                            timeout=30.0,
                         )
-                except Exception:
-                    logger.exception("Dispatch request failed for warehouse %d", wh_id)
+                        if resp.status_code == 200:
+                            dispatch_count += 1
+                        elif resp.status_code == 404:
+                            pass  # No forecasts yet for this warehouse
+                        else:
+                            logger.warning(
+                                "Dispatch failed for warehouse %d: %s", wh_id, resp.text
+                            )
+                    except Exception:
+                        logger.exception("Dispatch request failed for warehouse %d", wh_id)
 
-            result["steps"].append(
-                {
-                    "step": "auto_dispatch",
-                    "status": "ok",
-                    "anchor_ts": anchor_ts.isoformat(),
-                    "warehouses_total": len(warehouses),
-                    "warehouses_dispatched": dispatch_count,
-                }
-            )
+                result["steps"].append(
+                    {
+                        "step": "auto_dispatch",
+                        "status": "ok",
+                        "anchor_ts": anchor_ts.isoformat(),
+                        "warehouses_total": len(warehouses),
+                        "warehouses_dispatched": dispatch_count,
+                    }
+                )
 
-            self._last_status = "success"
-            result["status"] = "success"
+                self._last_status = "success"
+                result["status"] = "success"
 
         except Exception as e:
             logger.exception("Pipeline run failed")

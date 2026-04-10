@@ -6,15 +6,9 @@ import time
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
-from fastapi.responses import Response
+from fastapi import APIRouter, HTTPException, Request
 
 from app.core.orchestration import PromotionPolicy, run_retrain_cycle
-from app.core.team_track import (
-    evaluate_team_track,
-    read_template_upload,
-    render_submission_csv,
-)
 from app.storage import postgres as db
 
 logger = logging.getLogger(__name__)
@@ -53,18 +47,12 @@ def _get_registry(request: Request):
     return request.app.state.registry
 
 
-def _model_evaluation_available(model: dict[str, Any]) -> bool:
-    config = model.get("config_json") or {}
-    return bool(config.get("evaluation_ready"))
-
-
 def _normalise_model_entry(model: dict[str, Any], champion_version: str | None) -> dict[str, Any]:
     config = model.get("config_json") or {}
     return {
         **model,
         "config_json": config,
         "is_champion": model.get("model_version") == champion_version,
-        "evaluation_available": bool(config.get("evaluation_ready")),
     }
 
 
@@ -263,40 +251,6 @@ async def load_shadow(version: str, request: Request) -> dict:
         raise HTTPException(
             status_code=500, detail=f"Shadow load failed: {exc}"
         ) from exc
-
-
-@router.post("/team-track/preview")
-async def team_track_preview(
-    file: UploadFile = File(...),
-    model_version: str | None = Query(default=None),
-) -> dict[str, Any]:
-    """Validate a Team Track template and return a JSON preview."""
-    template_df = await read_template_upload(file)
-    evaluation = await evaluate_team_track(template_df, model_version)
-    return evaluation.to_preview_response()
-
-
-@router.post("/team-track/submission")
-async def team_track_submission(
-    file: UploadFile = File(...),
-    model_version: str | None = Query(default=None),
-) -> Response:
-    """Validate a Team Track template and return the submission CSV."""
-    template_df = await read_template_upload(file)
-    evaluation = await evaluate_team_track(template_df, model_version)
-    csv_body = render_submission_csv(evaluation.submission_rows)
-    suffix = (
-        evaluation.model["resolved_version"]
-        if evaluation.model.get("resolved_version")
-        else "active-primary"
-    )
-    return Response(
-        content=csv_body,
-        media_type="text/csv",
-        headers={
-            "Content-Disposition": f'attachment; filename="submission-{suffix}.csv"'
-        },
-    )
 
 
 # ---------------------------------------------------------------------------

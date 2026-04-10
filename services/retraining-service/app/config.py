@@ -19,9 +19,7 @@ class Settings(BaseSettings):
     model_output_dir: str = "/app/models"
     canonical_model_filename: str = "model.pkl"
     canonical_metadata_filename: str = "model_metadata.json"
-    canonical_static_aggs_filename: str = "static_aggs.json"
-    canonical_fill_values_filename: str = "fill_values.json"
-    training_window_days: int = 30
+    training_window_days: int = 7
     history_window: int = 288
     forecast_steps: int = 10
     step_interval_minutes: int = 30
@@ -31,22 +29,30 @@ class Settings(BaseSettings):
     # uses the same value by design — the two must stay in sync so we train
     # on exactly what the dispatcher will see.
     upload_retention_days: int = 7
-    min_training_rows: int = 1000
+    min_training_rows: int = 100
 
     # LightGBM hyperparameters
     n_estimators: int = 5000
-    learning_rate: float = 0.025
+    learning_rate: float = 0.02
     num_leaves: int = 63
     max_depth: int = 9
     min_child_samples: int = 80
+    min_child_weight: float = 0.01
+    min_split_gain: float = 0.05
     subsample: float = 0.8
-    colsample_bytree: float = 0.75
+    subsample_freq: int = 1
+    colsample_bytree: float = 0.7
     reg_alpha: float = 0.5
     reg_lambda: float = 8.0
+    subsample_for_bin: int = 200000
+    random_state: int = 42
+    n_jobs: int = -1
+    importance_type: str = "gain"
+    verbosity: int = -1
     early_stopping_rounds: int = 100
 
     # Shared internal secret. Required when retraining-service calls
-    # prediction-service control routes (/model/reload-features,
+    # prediction-service control routes (/model/reload,
     # /model/shadow/load, /model/shadow/promote) and scheduler control routes
     # (/pipeline/trigger). Dashboard still uses DATA_INGEST_TOKEN for the
     # separate upload path — see upload.py.
